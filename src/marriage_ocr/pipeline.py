@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 from marriage_ocr.config import load_runtime_config
 from marriage_ocr.logging_config import get_logger
 from marriage_ocr.models import ExtractedRecord
+from marriage_ocr.validation import validate_record
+from llm import GeminiRecordExtractor, merge_parser_and_gemini
 
 
 @dataclass(frozen=True)
@@ -55,7 +57,7 @@ def process_input(
     from marriage_ocr.parser import parse_record_ocr_output, save_parsed_record
     from marriage_ocr.postprocess import correct_bil_sequence
     from marriage_ocr.preprocess import PreprocessSettings, preprocess_image
-    from marriage_ocr.validation import estimate_layout_confidence, validate_record
+    from marriage_ocr.validation import estimate_layout_confidence
 
     loaded = load_runtime_config(config_path)
     cfg = loaded.data
@@ -71,6 +73,16 @@ def process_input(
     export_cfg = cfg.get("export", {})
     layout_cfg = cfg.get("layout", {})
     validation_cfg = cfg.get("validation", {})
+    llm_cfg = cfg.get("llm", {})
+    validation_input = {
+        **validation_cfg,
+        "min_average_confidence": ocr_cfg.get("min_average_confidence", 0.50),
+    }
+    gemini_processor = None if layout_only else _build_gemini_record_processor(
+        llm_cfg,
+        validation_config=validation_input,
+    )
+    gemini_state: dict[str, bool] = {"disabled": False}
 
     pages = load_document_pages(
         input_path,
@@ -160,14 +172,16 @@ def process_input(
                     min_record_height=int(layout_cfg.get("min_record_height_px", 80)),
                     max_record_height=int(layout_cfg.get("max_record_height_px", 280)),
                 )
-                validated_record = validate_record(
-                    parsed_record,
-                    record_output.cell_results,
-                    {
-                        **validation_cfg,
-                        "min_average_confidence": ocr_cfg.get("min_average_confidence", 0.50),
-                    },
+                validated_record = _validate_record_with_optional_gemini(
+                    parsed_record=parsed_record,
+                    record_output=record_output,
                     layout_confidence=layout_confidence,
+                    gemini_processor=gemini_processor,
+                    gemini_state=gemini_state,
+                    validation_config=validation_input,
+                    logger=logger,
+                    source_file=str(page.relative_source),
+                    source_page=page.source_page,
                 )
                 validated_record = replace(
                     validated_record,
@@ -303,5 +317,134 @@ def _emit_progress(
             detected_records=detected_records,
             parsed_records=parsed_records,
             message=message,
+        )
+    )
+
+
+def _build_gemini_record_processor(
+    llm_config: Mapping[str, Any],
+    *,
+    validation_config: Mapping[str, Any],
+) -> Callable[[ExtractedRecord, Any], ExtractedRecord] | None:
+    if not bool(llm_config.get("enabled", False)):
+        return None
+
+    provider = str(llm_config.get("provider", "")).strip().lower()
+    if provider != "gemini":
+        raise ValueError(
+            "Unsupported llm.provider value: "
+            f"{provider or '(missing)'}. Only 'gemini' is implemented."
+        )
+
+    extractor = GeminiRecordExtractor(llm_config)
+    prefer_gemini_threshold = float(llm_config.get("prefer_gemini_threshold", 0.70))
+    review_below_field_confidence = float(llm_config.get("review_below_field_confidence", 0.80))
+
+    def _process(
+        parser_record: ExtractedRecord,
+        record_output: Any,
+        *,
+        layout_confidence: float,
+    ) -> ExtractedRecord:
+        gemini_result = extractor.extract_record(
+            record_crop_path=record_output.record_dir / "full_record.jpg",
+            ocr_cells=record_output.cell_results,
+        )
+        return merge_parser_and_gemini(
+            parser_record=parser_record,
+            gemini_result=gemini_result,
+            cell_results=record_output.cell_results,
+            validation_config=validation_config,
+            layout_confidence=layout_confidence,
+            prefer_gemini_threshold=prefer_gemini_threshold,
+            review_below_field_confidence=review_below_field_confidence,
+        )
+
+    return _process
+
+
+def _validate_record_with_optional_gemini(
+    *,
+    parsed_record: ExtractedRecord,
+    record_output: Any,
+    layout_confidence: float,
+    gemini_processor: Callable[[ExtractedRecord, Any], ExtractedRecord] | None,
+    gemini_state: dict[str, bool] | None,
+    validation_config: Mapping[str, Any],
+    logger: Any,
+    source_file: str,
+    source_page: int,
+) -> ExtractedRecord:
+    if gemini_processor is None or (gemini_state is not None and gemini_state.get("disabled", False)):
+        return validate_record(
+            parsed_record,
+            record_output.cell_results,
+            validation_config,
+            layout_confidence=layout_confidence,
+        )
+
+    try:
+        return gemini_processor(
+            parsed_record,
+            record_output,
+            layout_confidence=layout_confidence,
+        )
+    except Exception as error:
+        logger.warning(
+            "Gemini merge failed for %s page %s; falling back to parser-only validation: %s",
+            source_file,
+            source_page,
+            error,
+        )
+        validated_record = validate_record(
+            parsed_record,
+            record_output.cell_results,
+            validation_config,
+            layout_confidence=layout_confidence,
+        )
+        fallback_reason = f"Gemini unavailable: {error.__class__.__name__}"
+        review_reason = list(validated_record.review_reason or [])
+        if fallback_reason not in review_reason:
+            review_reason.append(fallback_reason)
+        status_review = validated_record.status_review
+        if status_review == "OK":
+            status_review = "REVIEW"
+        if gemini_state is not None and _should_disable_gemini_for_run(error):
+            gemini_state["disabled"] = True
+            logger.warning(
+                "Gemini disabled for the remainder of this run after %s on %s page %s",
+                error.__class__.__name__,
+                source_file,
+                source_page,
+            )
+        return replace(
+            validated_record,
+            review_reason=review_reason,
+            status_review=status_review,
+        )
+
+
+def _should_disable_gemini_for_run(error: Exception) -> bool:
+    error_text = " ".join(
+        str(part)
+        for part in (
+            error.__class__.__name__,
+            *getattr(error, "args", ()),
+            str(error),
+        )
+    ).lower()
+    return any(
+        token in error_text
+        for token in (
+            "reported as leaked",
+            "permission_denied",
+            "permission denied",
+            "unauthenticated",
+            "resource_exhausted",
+            "quota exceeded",
+            "too many requests",
+            "429",
+            "403",
+            "401",
         )
     )

@@ -12,6 +12,7 @@ cp .env.example .env
 The CLI loads `.env` automatically when it exists. Runtime overrides can also be passed with environment variables such as `MARRIAGE_OCR_LOG_LEVEL=DEBUG`.
 
 The default OCR engine is `google_vision`. Before running real OCR, export `GOOGLE_APPLICATION_CREDENTIALS` to a valid Google Cloud service-account JSON file.
+If you enable the Gemini semantic extractor, export a single `GEMINI_API_KEY` as well.
 
 Example:
 
@@ -39,7 +40,27 @@ What you get:
 - per-record crops, raw OCR, parsed JSON, validated JSON
 - log file under `logs/`
 
-## 3. Review Records
+## 3. Batch Into Postgres With Gemini
+
+This is the path that runs Google Vision OCR, the existing parser, and the Gemini merge step before writing records into Postgres.
+
+```bash
+.venv/bin/python -m marriage_ocr.batch_runner \
+  --input-dir input \
+  --batch-name run_001 \
+  --output-dir runs/batch_output \
+  --config-path config/production.yaml
+```
+
+Then export Excel/CSV from Postgres:
+
+```bash
+.venv/bin/python -m marriage_ocr.export_from_postgres \
+  --output-dir exports/final_xlsx \
+  --csv-path exports/final_records.csv
+```
+
+## 4. Review Records
 
 ```bash
 .venv/bin/python -m marriage_ocr.cli review \
@@ -62,7 +83,7 @@ In the review UI you can:
 
 Corrections are saved into `corrected_record.json` inside each record directory.
 
-## 4. Export Training Data
+## 5. Export Training Data
 
 ```bash
 .venv/bin/python -m marriage_ocr.cli export-training \
@@ -88,7 +109,7 @@ The label format is:
 image_path<TAB>label_text
 ```
 
-## 5. Logs And Error Reports
+## 6. Logs And Error Reports
 
 Every CLI command writes a timestamped log file under `logs/`.
 
@@ -100,7 +121,7 @@ If a command fails unexpectedly, the CLI also writes a JSON error report under `
 - current working directory
 - relevant `MARRIAGE_OCR_*` environment variables
 
-## 6. Config Files
+## 7. Config Files
 
 - `config/default.yaml`: local development defaults
 - `config/production.yaml`: packaged runtime defaults
@@ -114,7 +135,7 @@ MARRIAGE_OCR_OCR_ENGINE=google_vision
 MARRIAGE_OCR__TRAINING_EXPORT__VALIDATION_RATIO=0.10
 ```
 
-## 7. Docker
+## 8. Docker
 
 Build:
 
@@ -155,7 +176,7 @@ docker run --rm -p 8501:8501 \
     --port 8501
 ```
 
-## 8. Known Limits
+## 9. Known Limits
 
 - The default OCR path now depends on Google Vision credentials and outbound network access.
 - Training export is structurally correct, but its usefulness depends on human-corrected cell labels.

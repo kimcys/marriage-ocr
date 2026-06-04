@@ -21,6 +21,8 @@ cp .env.example .env
 
 For the packaged default flow, that is enough. The default OCR engine is now Google Vision, so before running real OCR you must export `GOOGLE_APPLICATION_CREDENTIALS` to a valid Google Cloud service-account JSON file. PaddleOCR remains available only as an optional alternative engine.
 
+If you want the Gemini semantic extractor, export a single `GEMINI_API_KEY`.
+
 Run the pipeline with the packaged production settings:
 
 ```bash
@@ -30,6 +32,24 @@ Run the pipeline with the packaged production settings:
   --debug debug \
   --config config/production.yaml \
   --reset-output
+```
+
+Run the DB batch flow with Gemini enabled in `config/production.yaml`:
+
+```bash
+.venv/bin/python -m marriage_ocr.batch_runner \
+  --input-dir input \
+  --batch-name run_001 \
+  --output-dir runs/batch_output \
+  --config-path config/production.yaml
+```
+
+Export Excel/CSV from Postgres after the batch run:
+
+```bash
+.venv/bin/python -m marriage_ocr.export_from_postgres \
+  --output-dir exports/final_xlsx \
+  --csv-path exports/final_records.csv
 ```
 
 Start the human review UI:

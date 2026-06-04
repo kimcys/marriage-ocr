@@ -13,3 +13,6 @@ data/ground_truth/
 data/reviewed_exports/
 
 .env.local
+.env
+.env.*
+!.env.example

@@ -78,6 +78,16 @@ review:
   reviewer_name: production-reviewer
   export_path: data/reviewed_exports/daftar_perkahwinan_reviewed.xlsx
 
+llm:
+  enabled: true
+  provider: gemini
+  model: gemini-2.5-flash
+  temperature: 0.0
+  max_output_tokens: 4096
+  save_raw_json: true
+  prefer_gemini_threshold: 0.70
+  review_below_field_confidence: 0.80
+
 training_export:
   output_dir: data/ground_truth
   crops_dir: training_crops
