@@ -1,0 +1,270 @@
+{
+  "engine": "google_vision:full_page",
+  "record": "record_002",
+  "page_image": "runs/batch_output/99b7c60f-5246-4182-a917-c4a216e426cb/google_vision_full_page.jpg",
+  "cells": {
+    "bil": {
+      "text": "465/94 .",
+      "average_confidence": 0.8639141917228699,
+      "lines": [
+        {
+          "text": "465/94 .",
+          "confidence": 0.8639141917228699,
+          "bbox": [
+            99.0,
+            616.0,
+            196.0,
+            656.0
+          ]
+        }
+      ]
+    },
+    "suami_isteri": {
+      "text": "HAJA MOHIAREN BIN MOHAMED\nGANI - 1484613- 37 TAHUN .\nHAIROON , SAH BINTI IMANA DAYOOD\nA.2626030-21 TAHUN .\nRan . 80.00 .",
+      "average_confidence": 0.6816012054681778,
+      "lines": [
+        {
+          "text": "HAJA MOHIAREN BIN MOHAMED",
+          "confidence": 0.648942306637764,
+          "bbox": [
+            220.0,
+            605.0,
+            590.0,
+            653.0
+          ]
+        },
+        {
+          "text": "GANI - 1484613- 37 TAHUN .",
+          "confidence": 0.7911778489748637,
+          "bbox": [
+            214.0,
+            652.0,
+            560.0,
+            699.0
+          ]
+        },
+        {
+          "text": "HAIROON , SAH BINTI IMANA DAYOOD",
+          "confidence": 0.6778013706207275,
+          "bbox": [
+            222.0,
+            698.0,
+            605.0,
+            744.0
+          ]
+        },
+        {
+          "text": "A.2626030-21 TAHUN .",
+          "confidence": 0.6364890535672506,
+          "bbox": [
+            227.0,
+            749.0,
+            517.0,
+            779.0
+          ]
+        },
+        {
+          "text": "Ran . 80.00 .",
+          "confidence": 0.6535954475402832,
+          "bbox": [
+            229.0,
+            797.0,
+            354.0,
+            817.0
+          ]
+        }
+      ]
+    },
+    "pendaftar": {
+      "text": "HJ . HASAN B. MAT & ARSHAD\nPRI PRENDAFTAR NIKAH .\n, KAWASAN TANGAN , MATO\nHARYN . P. JAYA .",
+      "average_confidence": 0.6587205335497857,
+      "lines": [
+        {
+          "text": "HJ . HASAN B. MAT & ARSHAD",
+          "confidence": 0.7700918316841125,
+          "bbox": [
+            608.0,
+            596.0,
+            975.0,
+            642.0
+          ]
+        },
+        {
+          "text": "PRI PRENDAFTAR NIKAH .",
+          "confidence": 0.653124213218689,
+          "bbox": [
+            581.0,
+            643.0,
+            919.0,
+            689.0
+          ]
+        },
+        {
+          "text": ", KAWASAN TANGAN , MATO",
+          "confidence": 0.6274810612201691,
+          "bbox": [
+            605.0,
+            688.0,
+            928.0,
+            732.0
+          ]
+        },
+        {
+          "text": "HARYN . P. JAYA .",
+          "confidence": 0.5841850280761719,
+          "bbox": [
+            577.0,
+            737.0,
+            804.0,
+            774.0
+          ]
+        }
+      ]
+    },
+    "wali": {
+      "text": "IMAM\nSittukH\n(",
+      "average_confidence": 0.6745131810506185,
+      "lines": [
+        {
+          "text": "IMAM",
+          "confidence": 0.8474289178848267,
+          "bbox": [
+            1004.0,
+            593.0,
+            1070.0,
+            632.0
+          ]
+        },
+        {
+          "text": "SittukH",
+          "confidence": 0.3689294457435608,
+          "bbox": [
+            969.0,
+            644.0,
+            1056.0,
+            673.0
+          ]
+        },
+        {
+          "text": "(",
+          "confidence": 0.807181179523468,
+          "bbox": [
+            1123.0,
+            687.0,
+            1145.0,
+            724.0
+          ]
+        }
+      ]
+    },
+    "hubungan_wali": {
+      "text": "DAYOOD . BIN\nFAREED .\nBapa )",
+      "average_confidence": 0.7044506735271878,
+      "lines": [
+        {
+          "text": "DAYOOD . BIN",
+          "confidence": 0.6607312162717184,
+          "bbox": [
+            1106.0,
+            588.0,
+            1270.0,
+            630.0
+          ]
+        },
+        {
+          "text": "FAREED .",
+          "confidence": 0.5293149054050446,
+          "bbox": [
+            1103.0,
+            643.0,
+            1210.0,
+            673.0
+          ]
+        },
+        {
+          "text": "Bapa )",
+          "confidence": 0.9233058989048004,
+          "bbox": [
+            1142.0,
+            687.0,
+            1224.0,
+            724.0
+          ]
+        }
+      ]
+    },
+    "saksi": {
+      "text": "ARD . SAMAD\nRIDWAN Pins\nABD . MOTM",
+      "average_confidence": 0.5534408456749387,
+      "lines": [
+        {
+          "text": "ARD . SAMAD",
+          "confidence": 0.7733347415924072,
+          "bbox": [
+            1284.0,
+            637.0,
+            1444.0,
+            668.0
+          ]
+        },
+        {
+          "text": "RIDWAN Pins",
+          "confidence": 0.4324917495250702,
+          "bbox": [
+            1303.0,
+            678.0,
+            1494.0,
+            713.0
+          ]
+        },
+        {
+          "text": "ABD . MOTM",
+          "confidence": 0.45449604590733844,
+          "bbox": [
+            1285.0,
+            723.0,
+            1434.0,
+            762.0
+          ]
+        }
+      ]
+    },
+    "tarikh_nikah": {
+      "text": "",
+      "average_confidence": 0.0,
+      "lines": []
+    },
+    "tarikh_keluar": {
+      "text": "Imam",
+      "average_confidence": 0.9330885410308838,
+      "lines": [
+        {
+          "text": "Imam",
+          "confidence": 0.9330885410308838,
+          "bbox": [
+            1956.0,
+            624.0,
+            2029.0,
+            656.0
+          ]
+        }
+      ]
+    },
+    "remarks": {
+      "text": "Darood ( Wali )",
+      "average_confidence": 0.8559152781963348,
+      "lines": [
+        {
+          "text": "Darood ( Wali )",
+          "confidence": 0.8559152781963348,
+          "bbox": [
+            2033.0,
+            618.0,
+            2200.0,
+            653.0
+          ]
+        }
+      ]
+    }
+  }
+}

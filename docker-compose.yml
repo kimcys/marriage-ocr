@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: marriage_ocr_postgres
+    environment:
+      POSTGRES_DB: marriagedb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Aim@nHakim#712
+    ports:
+      - "5432:5432"
+    volumes:
+      - marriage_ocr_pgdata:/var/lib/postgresql/data
+
+volumes:
+  marriage_ocr_pgdata:

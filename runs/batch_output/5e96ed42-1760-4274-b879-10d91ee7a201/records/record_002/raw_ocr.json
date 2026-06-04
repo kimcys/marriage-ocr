@@ -1,0 +1,250 @@
+{
+  "engine": "google_vision:full_page",
+  "record": "record_002",
+  "page_image": "runs/batch_output/5e96ed42-1760-4274-b879-10d91ee7a201/google_vision_full_page.jpg",
+  "cells": {
+    "bil": {
+      "text": "461/94",
+      "average_confidence": 0.878917932510376,
+      "lines": [
+        {
+          "text": "461/94",
+          "confidence": 0.878917932510376,
+          "bbox": [
+            68.0,
+            592.0,
+            155.0,
+            626.0
+          ]
+        }
+      ]
+    },
+    "suami_isteri": {
+      "text": "MOHD . HANIF BIN MANSOR\n@MANSORA 2360015-2 TAHUN\nZAUYAH BINTI MOHAMMAD .\n4.5361011 TAHUN .\nRM . 80.00 .",
+      "average_confidence": 0.7330612224340439,
+      "lines": [
+        {
+          "text": "MOHD . HANIF BIN MANSOR",
+          "confidence": 0.7658199429512024,
+          "bbox": [
+            193.0,
+            586.0,
+            515.0,
+            624.0
+          ]
+        },
+        {
+          "text": "@MANSORA 2360015-2 TAHUN",
+          "confidence": 0.6555971205234528,
+          "bbox": [
+            191.0,
+            631.0,
+            549.0,
+            667.0
+          ]
+        },
+        {
+          "text": "ZAUYAH BINTI MOHAMMAD .",
+          "confidence": 0.7843350768089294,
+          "bbox": [
+            199.0,
+            676.0,
+            529.0,
+            713.0
+          ]
+        },
+        {
+          "text": "4.5361011 TAHUN .",
+          "confidence": 0.7868404388427734,
+          "bbox": [
+            191.0,
+            723.0,
+            472.0,
+            750.0
+          ]
+        },
+        {
+          "text": "RM . 80.00 .",
+          "confidence": 0.6727135330438614,
+          "bbox": [
+            194.0,
+            767.0,
+            322.0,
+            791.0
+          ]
+        }
+      ]
+    },
+    "pendaftar": {
+      "text": "HJ . MISRI BIN HANDAN .\nPEN . PENDAFTAR MIKLAU\nKAWASAN ICG . St. , KAYU ARA .\nDAMANSARA P. JAYA .",
+      "average_confidence": 0.6541686483348409,
+      "lines": [
+        {
+          "text": "HJ . MISRI BIN HANDAN .",
+          "confidence": 0.6763834158579508,
+          "bbox": [
+            568.0,
+            580.0,
+            904.0,
+            609.0
+          ]
+        },
+        {
+          "text": "PEN . PENDAFTAR MIKLAU",
+          "confidence": 0.47371768951416016,
+          "bbox": [
+            563.0,
+            624.0,
+            872.0,
+            660.0
+          ]
+        },
+        {
+          "text": "KAWASAN ICG . St. , KAYU ARA .",
+          "confidence": 0.6872400902211666,
+          "bbox": [
+            550.0,
+            670.0,
+            917.0,
+            708.0
+          ]
+        },
+        {
+          "text": "DAMANSARA P. JAYA .",
+          "confidence": 0.7793333977460861,
+          "bbox": [
+            546.0,
+            716.0,
+            832.0,
+            744.0
+          ]
+        }
+      ]
+    },
+    "wali": {
+      "text": "MOHAMAD BIN",
+      "average_confidence": 0.6778713464736938,
+      "lines": [
+        {
+          "text": "MOHAMAD BIN",
+          "confidence": 0.6778713464736938,
+          "bbox": [
+            932.0,
+            580.0,
+            1136.0,
+            609.0
+          ]
+        }
+      ]
+    },
+    "hubungan_wali": {
+      "text": "HAMID\n( Bapa )",
+      "average_confidence": 0.635995626449585,
+      "lines": [
+        {
+          "text": "HAMID",
+          "confidence": 0.5914247632026672,
+          "bbox": [
+            1147.0,
+            580.0,
+            1243.0,
+            609.0
+          ]
+        },
+        {
+          "text": "( Bapa )",
+          "confidence": 0.6805664896965027,
+          "bbox": [
+            1117.0,
+            629.0,
+            1202.0,
+            656.0
+          ]
+        }
+      ]
+    },
+    "saksi": {
+      "text": "\u2460MOHAMAD MOOR\nBin ARSHAD .\nHJ . MOHD ARIF\nBin Hussin",
+      "average_confidence": 0.5785968409230312,
+      "lines": [
+        {
+          "text": "\u2460MOHAMAD MOOR",
+          "confidence": 0.6185543239116669,
+          "bbox": [
+            1266.0,
+            580.0,
+            1504.0,
+            609.0
+          ]
+        },
+        {
+          "text": "Bin ARSHAD .",
+          "confidence": 0.5506239434083303,
+          "bbox": [
+            1271.0,
+            627.0,
+            1449.0,
+            653.0
+          ]
+        },
+        {
+          "text": "HJ . MOHD ARIF",
+          "confidence": 0.5371625646948814,
+          "bbox": [
+            1294.0,
+            674.0,
+            1478.0,
+            697.0
+          ]
+        },
+        {
+          "text": "Bin Hussin",
+          "confidence": 0.6080465316772461,
+          "bbox": [
+            1270.0,
+            716.0,
+            1430.0,
+            741.0
+          ]
+        }
+      ]
+    },
+    "tarikh_nikah": {
+      "text": "278.94",
+      "average_confidence": 0.88539719581604,
+      "lines": [
+        {
+          "text": "278.94",
+          "confidence": 0.88539719581604,
+          "bbox": [
+            1528.0,
+            580.0,
+            1634.0,
+            609.0
+          ]
+        }
+      ]
+    },
+    "tarikh_keluar": {
+      "text": "1.10.94",
+      "average_confidence": 0.9328323602676392,
+      "lines": [
+        {
+          "text": "1.10.94",
+          "confidence": 0.9328323602676392,
+          "bbox": [
+            1804.0,
+            584.0,
+            1924.0,
+            607.0
+          ]
+        }
+      ]
+    },
+    "remarks": {
+      "text": "",
+      "average_confidence": 0.0,
+      "lines": []
+    }
+  }
+}

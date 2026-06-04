@@ -1,0 +1,240 @@
+{
+  "engine": "google_vision:full_page",
+  "record": "record_002",
+  "page_image": "runs/batch_output/WhatsApp_Image_2026-05-18_at_09.35.03/google_vision_full_page.jpg",
+  "cells": {
+    "bil": {
+      "text": "469/94",
+      "average_confidence": 0.9159391522407532,
+      "lines": [
+        {
+          "text": "469/94",
+          "confidence": 0.9159391522407532,
+          "bbox": [
+            62.0,
+            593.0,
+            151.0,
+            621.0
+          ]
+        }
+      ]
+    },
+    "suami_isteri": {
+      "text": "SABDUL B. TAIB\nA. 1186786. 257AHUN\nNOOR AZURAH BT . SENIN\nA 1832779 23TAHUN\nRM . 80.00",
+      "average_confidence": 0.7887378931045532,
+      "lines": [
+        {
+          "text": "SABDUL B. TAIB",
+          "confidence": 0.8423176407814026,
+          "bbox": [
+            196.0,
+            598.0,
+            420.0,
+            619.0
+          ]
+        },
+        {
+          "text": "A. 1186786. 257AHUN",
+          "confidence": 0.7623372276624044,
+          "bbox": [
+            199.0,
+            631.0,
+            519.0,
+            669.0
+          ]
+        },
+        {
+          "text": "NOOR AZURAH BT . SENIN",
+          "confidence": 0.7184221148490906,
+          "bbox": [
+            194.0,
+            687.0,
+            488.0,
+            705.0
+          ]
+        },
+        {
+          "text": "A 1832779 23TAHUN",
+          "confidence": 0.8416770100593567,
+          "bbox": [
+            198.0,
+            726.0,
+            521.0,
+            747.0
+          ]
+        },
+        {
+          "text": "RM . 80.00",
+          "confidence": 0.7789354721705118,
+          "bbox": [
+            200.0,
+            765.0,
+            305.0,
+            793.0
+          ]
+        }
+      ]
+    },
+    "pendaftar": {
+      "text": "18MAIL B. ROSLAN\nMASJID JAMEK\nSERDANG",
+      "average_confidence": 0.7547444568739997,
+      "lines": [
+        {
+          "text": "18MAIL B. ROSLAN",
+          "confidence": 0.6468687852223715,
+          "bbox": [
+            561.0,
+            584.0,
+            861.0,
+            614.0
+          ]
+        },
+        {
+          "text": "MASJID JAMEK",
+          "confidence": 0.8020102381706238,
+          "bbox": [
+            565.0,
+            631.0,
+            797.0,
+            662.0
+          ]
+        },
+        {
+          "text": "SERDANG",
+          "confidence": 0.8153543472290039,
+          "bbox": [
+            568.0,
+            680.0,
+            709.0,
+            702.0
+          ]
+        }
+      ]
+    },
+    "wali": {
+      "text": "NORLISAM\nSAUDARA\nCABANG )",
+      "average_confidence": 0.818519781033198,
+      "lines": [
+        {
+          "text": "NORLISAM",
+          "confidence": 0.7656559944152832,
+          "bbox": [
+            936.0,
+            588.0,
+            1076.0,
+            606.0
+          ]
+        },
+        {
+          "text": "SAUDARA",
+          "confidence": 0.8178228735923767,
+          "bbox": [
+            938.0,
+            633.0,
+            1057.0,
+            651.0
+          ]
+        },
+        {
+          "text": "CABANG )",
+          "confidence": 0.8720804750919342,
+          "bbox": [
+            941.0,
+            673.0,
+            1071.0,
+            698.0
+          ]
+        }
+      ]
+    },
+    "hubungan_wali": {
+      "text": "3. SENIN\nLECAKI",
+      "average_confidence": 0.7403679937124252,
+      "lines": [
+        {
+          "text": "3. SENIN",
+          "confidence": 0.6537488996982574,
+          "bbox": [
+            1114.0,
+            587.0,
+            1250.0,
+            608.0
+          ]
+        },
+        {
+          "text": "LECAKI",
+          "confidence": 0.826987087726593,
+          "bbox": [
+            1125.0,
+            634.0,
+            1245.0,
+            653.0
+          ]
+        }
+      ]
+    },
+    "saksi": {
+      "text": "JANTAN B.LASIM\nOTHMAN B. AWANG",
+      "average_confidence": 0.7654033998648326,
+      "lines": [
+        {
+          "text": "JANTAN B.LASIM",
+          "confidence": 0.5978534817695618,
+          "bbox": [
+            1292.0,
+            587.0,
+            1507.0,
+            611.0
+          ]
+        },
+        {
+          "text": "OTHMAN B. AWANG",
+          "confidence": 0.9329533179601034,
+          "bbox": [
+            1289.0,
+            636.0,
+            1495.0,
+            656.0
+          ]
+        }
+      ]
+    },
+    "tarikh_nikah": {
+      "text": "> 7.8.94",
+      "average_confidence": 0.6519963145256042,
+      "lines": [
+        {
+          "text": "> 7.8.94",
+          "confidence": 0.6519963145256042,
+          "bbox": [
+            1518.0,
+            589.0,
+            1638.0,
+            611.0
+          ]
+        }
+      ]
+    },
+    "tarikh_keluar": {
+      "text": "24.9.94",
+      "average_confidence": 0.9415332674980164,
+      "lines": [
+        {
+          "text": "24.9.94",
+          "confidence": 0.9415332674980164,
+          "bbox": [
+            1803.0,
+            579.0,
+            1940.0,
+            619.0
+          ]
+        }
+      ]
+    },
+    "remarks": {
+      "text": "",
+      "average_confidence": 0.0,
+      "lines": []
+    }
+  }
+}

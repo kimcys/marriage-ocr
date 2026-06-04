@@ -1,0 +1,13 @@
+{
+  "job_id": "20260604_150943_b87979d0",
+  "status": "DONE",
+  "created_at": "2026-06-04T15:09:43",
+  "updated_at": "2026-06-04T15:10:03",
+  "input_dir": "data/jobs/20260604_150943_b87979d0/input",
+  "output_dir": "data/jobs/20260604_150943_b87979d0/output",
+  "debug_dir": "data/jobs/20260604_150943_b87979d0/debug",
+  "message": "OCR completed",
+  "total_pages": 3,
+  "total_detected_records": 12,
+  "total_parsed_records": 12
+}

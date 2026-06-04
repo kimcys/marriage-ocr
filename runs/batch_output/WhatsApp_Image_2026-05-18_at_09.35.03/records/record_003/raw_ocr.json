@@ -1,0 +1,271 @@
+{
+  "engine": "google_vision:full_page",
+  "record": "record_003",
+  "page_image": "runs/batch_output/WhatsApp_Image_2026-05-18_at_09.35.03/google_vision_full_page.jpg",
+  "cells": {
+    "bil": {
+      "text": "470/94",
+      "average_confidence": 0.8208259344100952,
+      "lines": [
+        {
+          "text": "470/94",
+          "confidence": 0.8208259344100952,
+          "bbox": [
+            67.0,
+            938.0,
+            155.0,
+            966.0
+          ]
+        }
+      ]
+    },
+    "suami_isteri": {
+      "text": "ABDUL RAHMAN BARI JAKARTA\nA. 1446955 TAHUN .\nNORRAINAH BIN MOHAMMED\nNOOR.A.2402351-21 TAHUN .\nRM . 80.00 .",
+      "average_confidence": 0.7477116932471594,
+      "lines": [
+        {
+          "text": "ABDUL RAHMAN BARI JAKARTA",
+          "confidence": 0.5902245342731476,
+          "bbox": [
+            192.0,
+            938.0,
+            543.0,
+            967.0
+          ]
+        },
+        {
+          "text": "A. 1446955 TAHUN .",
+          "confidence": 0.82160684466362,
+          "bbox": [
+            198.0,
+            986.0,
+            484.0,
+            1008.0
+          ]
+        },
+        {
+          "text": "NORRAINAH BIN MOHAMMED",
+          "confidence": 0.7708628177642822,
+          "bbox": [
+            202.0,
+            1023.0,
+            555.0,
+            1053.0
+          ]
+        },
+        {
+          "text": "NOOR.A.2402351-21 TAHUN .",
+          "confidence": 0.790931502978007,
+          "bbox": [
+            203.0,
+            1063.0,
+            537.0,
+            1102.0
+          ]
+        },
+        {
+          "text": "RM . 80.00 .",
+          "confidence": 0.7649327665567398,
+          "bbox": [
+            202.0,
+            1111.0,
+            323.0,
+            1132.0
+          ]
+        }
+      ]
+    },
+    "pendaftar": {
+      "text": "HJ . SETIC BIN SALAMI\nPENC . PENDAFTAR NIKAH .\n( CAMASAN MASJID JANGER .\nBATL 12. PRICHONG . P. JAYA .",
+      "average_confidence": 0.650259173980781,
+      "lines": [
+        {
+          "text": "HJ . SETIC BIN SALAMI",
+          "confidence": 0.6469310998916626,
+          "bbox": [
+            563.0,
+            939.0,
+            856.0,
+            968.0
+          ]
+        },
+        {
+          "text": "PENC . PENDAFTAR NIKAH .",
+          "confidence": 0.5933690428733825,
+          "bbox": [
+            554.0,
+            983.0,
+            866.0,
+            1017.0
+          ]
+        },
+        {
+          "text": "( CAMASAN MASJID JANGER .",
+          "confidence": 0.6013595759868622,
+          "bbox": [
+            566.0,
+            1025.0,
+            903.0,
+            1055.0
+          ]
+        },
+        {
+          "text": "BATL 12. PRICHONG . P. JAYA .",
+          "confidence": 0.7593769771712167,
+          "bbox": [
+            559.0,
+            1068.0,
+            915.0,
+            1108.0
+          ]
+        }
+      ]
+    },
+    "wali": {
+      "text": "MOHAMMED\nMOHITAR",
+      "average_confidence": 0.7996256947517395,
+      "lines": [
+        {
+          "text": "MOHAMMED",
+          "confidence": 0.8877143263816833,
+          "bbox": [
+            934.0,
+            928.0,
+            1085.0,
+            968.0
+          ]
+        },
+        {
+          "text": "MOHITAR",
+          "confidence": 0.7115370631217957,
+          "bbox": [
+            935.0,
+            976.0,
+            1067.0,
+            1019.0
+          ]
+        }
+      ]
+    },
+    "hubungan_wali": {
+      "text": "MOOR Poin\n( Bapa )",
+      "average_confidence": 0.6190500557422638,
+      "lines": [
+        {
+          "text": "MOOR Poin",
+          "confidence": 0.5011571645736694,
+          "bbox": [
+            1105.0,
+            928.0,
+            1243.0,
+            968.0
+          ]
+        },
+        {
+          "text": "( Bapa )",
+          "confidence": 0.7369429469108582,
+          "bbox": [
+            1111.0,
+            968.0,
+            1214.0,
+            1009.0
+          ]
+        }
+      ]
+    },
+    "saksi": {
+      "text": "\u2460SARNUTI BEING\nMIDI\nHJ . MAHMOD .\nBin HJ , Hussin",
+      "average_confidence": 0.6205869372934103,
+      "lines": [
+        {
+          "text": "\u2460SARNUTI BEING",
+          "confidence": 0.49577227234840393,
+          "bbox": [
+            1268.0,
+            928.0,
+            1495.0,
+            968.0
+          ]
+        },
+        {
+          "text": "MIDI",
+          "confidence": 0.6169034242630005,
+          "bbox": [
+            1275.0,
+            978.0,
+            1347.0,
+            1002.0
+          ]
+        },
+        {
+          "text": "HJ . MAHMOD .",
+          "confidence": 0.8108088970184326,
+          "bbox": [
+            1307.0,
+            1020.0,
+            1490.0,
+            1047.0
+          ]
+        },
+        {
+          "text": "Bin HJ , Hussin",
+          "confidence": 0.5588631555438042,
+          "bbox": [
+            1272.0,
+            1066.0,
+            1487.0,
+            1090.0
+          ]
+        }
+      ]
+    },
+    "tarikh_nikah": {
+      "text": "27.894 .",
+      "average_confidence": 0.869929164648056,
+      "lines": [
+        {
+          "text": "27.894 .",
+          "confidence": 0.869929164648056,
+          "bbox": [
+            1524.0,
+            928.0,
+            1639.0,
+            968.0
+          ]
+        }
+      ]
+    },
+    "tarikh_keluar": {
+      "text": "22-10-94",
+      "average_confidence": 0.7455176711082458,
+      "lines": [
+        {
+          "text": "22-10-94",
+          "confidence": 0.7455176711082458,
+          "bbox": [
+            1807.0,
+            933.0,
+            1940.0,
+            958.0
+          ]
+        }
+      ]
+    },
+    "remarks": {
+      "text": "Diambil oleh suami",
+      "average_confidence": 0.7865588267644247,
+      "lines": [
+        {
+          "text": "Diambil oleh suami",
+          "confidence": 0.7865588267644247,
+          "bbox": [
+            1942.0,
+            930.0,
+            2180.0,
+            957.0
+          ]
+        }
+      ]
+    }
+  }
+}

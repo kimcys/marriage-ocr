@@ -1,0 +1,271 @@
+{
+  "engine": "google_vision:full_page",
+  "record": "record_003",
+  "page_image": "runs/batch_output/99b7c60f-5246-4182-a917-c4a216e426cb/google_vision_full_page.jpg",
+  "cells": {
+    "bil": {
+      "text": "466/94",
+      "average_confidence": 0.8405588865280151,
+      "lines": [
+        {
+          "text": "466/94",
+          "confidence": 0.8405588865280151,
+          "bbox": [
+            98.0,
+            961.0,
+            193.0,
+            993.0
+          ]
+        }
+      ]
+    },
+    "suami_isteri": {
+      "text": "ALI BIN HJ . TAHAR .\n6075913-34 TAHUN .\nSALUA BING , AHMED SAMION\nA. 1777676-24 TAHUN .\nRM . 80.00 .",
+      "average_confidence": 0.7136747630437215,
+      "lines": [
+        {
+          "text": "ALI BIN HJ . TAHAR .",
+          "confidence": 0.6648649821678797,
+          "bbox": [
+            232.0,
+            965.0,
+            494.0,
+            992.0
+          ]
+        },
+        {
+          "text": "6075913-34 TAHUN .",
+          "confidence": 0.851978600025177,
+          "bbox": [
+            236.0,
+            1010.0,
+            531.0,
+            1040.0
+          ]
+        },
+        {
+          "text": "SALUA BING , AHMED SAMION",
+          "confidence": 0.6124827623367309,
+          "bbox": [
+            238.0,
+            1052.0,
+            602.0,
+            1082.0
+          ]
+        },
+        {
+          "text": "A. 1777676-24 TAHUN .",
+          "confidence": 0.6661974340677261,
+          "bbox": [
+            232.0,
+            1100.0,
+            542.0,
+            1129.0
+          ]
+        },
+        {
+          "text": "RM . 80.00 .",
+          "confidence": 0.7728500366210938,
+          "bbox": [
+            236.0,
+            1141.0,
+            371.0,
+            1163.0
+          ]
+        }
+      ]
+    },
+    "pendaftar": {
+      "text": "HJ . HASAN B.MAT @ARSHAD\nPEN . PENDAFTAR MICAH .\nKAWASAN TANGAN DAGO\nHARUN . P. JAYA .",
+      "average_confidence": 0.6237245927254359,
+      "lines": [
+        {
+          "text": "HJ . HASAN B.MAT @ARSHAD",
+          "confidence": 0.6031729757785798,
+          "bbox": [
+            586.0,
+            965.0,
+            946.0,
+            994.0
+          ]
+        },
+        {
+          "text": "PEN . PENDAFTAR MICAH .",
+          "confidence": 0.6355888903141022,
+          "bbox": [
+            587.0,
+            1011.0,
+            909.0,
+            1047.0
+          ]
+        },
+        {
+          "text": "KAWASAN TANGAN DAGO",
+          "confidence": 0.597235898176829,
+          "bbox": [
+            617.0,
+            1057.0,
+            928.0,
+            1086.0
+          ]
+        },
+        {
+          "text": "HARUN . P. JAYA .",
+          "confidence": 0.6589006066322327,
+          "bbox": [
+            590.0,
+            1102.0,
+            832.0,
+            1131.0
+          ]
+        }
+      ]
+    },
+    "wali": {
+      "text": "AHMED .\nMOHD ARIFF in",
+      "average_confidence": 0.6867284377415974,
+      "lines": [
+        {
+          "text": "AHMED .",
+          "confidence": 0.8236377835273743,
+          "bbox": [
+            970.0,
+            964.0,
+            1078.0,
+            991.0
+          ]
+        },
+        {
+          "text": "MOHD ARIFF in",
+          "confidence": 0.5498190919558207,
+          "bbox": [
+            965.0,
+            992.0,
+            1150.0,
+            1041.0
+          ]
+        }
+      ]
+    },
+    "hubungan_wali": {
+      "text": "SAMION BIN\n( Reps ) .",
+      "average_confidence": 0.5282509699463844,
+      "lines": [
+        {
+          "text": "SAMION BIN",
+          "confidence": 0.48565369844436646,
+          "bbox": [
+            1115.0,
+            946.0,
+            1286.0,
+            973.0
+          ]
+        },
+        {
+          "text": "( Reps ) .",
+          "confidence": 0.5708482414484024,
+          "bbox": [
+            1167.0,
+            992.0,
+            1264.0,
+            1026.0
+          ]
+        }
+      ]
+    },
+    "saksi": {
+      "text": "HJ . ISHAKL .\nBring yop .\nHJ . ARTS Bias\nSURAT .",
+      "average_confidence": 0.7214516370246807,
+      "lines": [
+        {
+          "text": "HJ . ISHAKL .",
+          "confidence": 0.8177914768457413,
+          "bbox": [
+            1331.0,
+            944.0,
+            1470.0,
+            971.0
+          ]
+        },
+        {
+          "text": "Bring yop .",
+          "confidence": 0.774578313032786,
+          "bbox": [
+            1292.0,
+            992.0,
+            1429.0,
+            1026.0
+          ]
+        },
+        {
+          "text": "HJ . ARTS Bias",
+          "confidence": 0.565962128341198,
+          "bbox": [
+            1315.0,
+            1031.0,
+            1495.0,
+            1063.0
+          ]
+        },
+        {
+          "text": "SURAT .",
+          "confidence": 0.7274746298789978,
+          "bbox": [
+            1300.0,
+            1080.0,
+            1409.0,
+            1107.0
+          ]
+        }
+      ]
+    },
+    "tarikh_nikah": {
+      "text": "27.8.94 . a",
+      "average_confidence": 0.5946221351623535,
+      "lines": [
+        {
+          "text": "27.8.94 . a",
+          "confidence": 0.5946221351623535,
+          "bbox": [
+            1531.0,
+            935.0,
+            1703.0,
+            982.0
+          ]
+        }
+      ]
+    },
+    "tarikh_keluar": {
+      "text": "28-9-94 Diambil",
+      "average_confidence": 0.838390976190567,
+      "lines": [
+        {
+          "text": "28-9-94 Diambil",
+          "confidence": 0.838390976190567,
+          "bbox": [
+            1821.0,
+            923.0,
+            2053.0,
+            972.0
+          ]
+        }
+      ]
+    },
+    "remarks": {
+      "text": "dah suami",
+      "average_confidence": 0.7042316198348999,
+      "lines": [
+        {
+          "text": "dah suami",
+          "confidence": 0.7042316198348999,
+          "bbox": [
+            2049.0,
+            919.0,
+            2180.0,
+            965.0
+          ]
+        }
+      ]
+    }
+  }
+}
