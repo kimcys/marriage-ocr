@@ -1,0 +1,106 @@
+project:
+  name: marriage-ocr
+  environment: production
+
+input:
+  allowed_extensions:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".tif"
+    - ".tiff"
+    - ".pdf"
+  pdf_dpi: 250
+
+preprocessing:
+  processing_width: 2400
+  expected_landscape: true
+  denoise_kernel_size: 5
+  threshold_method: otsu
+  adaptive_block_size: 31
+  adaptive_c: 15
+  deskew_enabled: false
+  deskew_max_angle: 7.5
+  min_rotation_for_deskew: 0.15
+  hough_threshold: 160
+  hough_min_line_length_ratio: 0.35
+  hough_max_line_gap: 20
+
+layout:
+  auto_detect_table: true
+  auto_detect_columns: true
+  fallback_column_ratios:
+    bil: [0.00, 0.08]
+    suami_isteri: [0.08, 0.25]
+    pendaftar: [0.25, 0.43]
+    wali: [0.43, 0.50]
+    hubungan_wali: [0.50, 0.58]
+    saksi: [0.58, 0.70]
+    tarikh_nikah: [0.70, 0.77]
+    tandatangan: [0.77, 0.84]
+    tarikh_keluar: [0.84, 0.91]
+    remarks: [0.91, 1.00]
+  min_record_height_px: 80
+  max_record_height_px: 280
+
+ocr:
+  engine: google_vision
+  mode: full_page
+  min_average_confidence: 0.55
+  save_raw_json: true
+  google_vision:
+    language_hints:
+      - ms
+      - en
+  mock:
+    prefix: MOCK_OCR
+    base_confidence: 0.82
+  paddle:
+    use_angle_cls: true
+    lang: en
+    show_log: false
+
+validation:
+  ok_confidence_threshold: 0.90
+  min_age: 15
+  max_age: 100
+  require_mas_kahwin: true
+  require_tarikh_nikah: true
+
+export:
+  append: true
+  dedupe: true
+  sheet_name: Records
+  include_raw_columns: true
+  include_debug_paths: true
+
+review:
+  reviewer_name: production-reviewer
+  export_path: data/reviewed_exports/daftar_perkahwinan_reviewed.xlsx
+
+training_export:
+  output_dir: data/ground_truth
+  crops_dir: training_crops
+  labels_file: labels.tsv
+  train_file: train.tsv
+  validation_file: val.tsv
+  manifest_file: manifest.jsonl
+  stats_file: stats.json
+  verified_only: true
+  validation_ratio: 0.20
+
+logging:
+  level: INFO
+  directory: logs
+  error_report_dir: logs/error_reports
+  filename_prefix: marriage-ocr
+  max_bytes: 10485760
+  backup_count: 10
+  console: true
+  file: true
+
+postprocess:
+  bil_sequence:
+    enabled: true
+    start_number: null
+    year: null

@@ -1,0 +1,15 @@
+.DS_Store
+.pytest_cache/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+logs/
+debug/
+output/
+data/ground_truth/
+data/reviewed_exports/
+
+.env.local
