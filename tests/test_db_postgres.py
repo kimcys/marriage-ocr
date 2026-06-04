@@ -117,3 +117,39 @@ def test_insert_record_normalizes_status_and_source_numbers(monkeypatch):
     assert captured_params[0][14] == "OK"
     assert captured_params[0][16].obj == ["missing wali"]
     assert captured_params[0][13].obj == "{\"ok\": true}"
+
+
+def test_fetch_records_for_batch_returns_extracted_records(monkeypatch):
+    class DummyCursor:
+        def execute(self, query, params=None):
+            self.query = query
+            self.params = params
+
+        def fetchall(self):
+            return [
+                {"raw_record": {"bil": "2", "nama_suami": "SECOND", "source_record": "record_002"}},
+                {"raw_record": {"bil": "1", "nama_suami": "FIRST", "source_record": "record_001"}},
+            ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyConnection:
+        def cursor(self):
+            return DummyCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(db_postgres, "get_connection", lambda: DummyConnection())
+
+    records = db_postgres.fetch_records_for_batch(7)
+
+    assert [record.bil for record in records] == ["2", "1"]
+    assert [record.nama_suami for record in records] == ["SECOND", "FIRST"]

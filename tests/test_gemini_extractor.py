@@ -90,3 +90,100 @@ def test_extract_record_uses_single_client(tmp_path: Path) -> None:
     assert result.record.bil == "7"
     assert len(models.calls) == 1
     assert models.calls[0]["model"] == "gemini-2.5-flash"
+
+
+def test_extract_record_prefers_sdk_parsed_payload(tmp_path: Path) -> None:
+    class FakePart:
+        @staticmethod
+        def from_bytes(*, data: bytes, mime_type: str) -> dict[str, object]:
+            return {"data": data, "mime_type": mime_type}
+
+    class FakeGenerateContentConfig:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class FakeTypes:
+        Part = FakePart
+        GenerateContentConfig = FakeGenerateContentConfig
+
+    class Models:
+        def generate_content(self, *, model: str, contents: list[object], config: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                parsed={"bil": "9", "nama_suami": "TEST SUAMI"},
+                text='{"bil": "broken"',
+            )
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.models = Models()
+
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+    extractor.model = "gemini-2.5-flash"
+    extractor.temperature = 0.0
+    extractor.max_output_tokens = 4096
+    extractor.save_raw_json = False
+    extractor._types = FakeTypes()
+    extractor._client = FakeClient()
+    extractor._api_key_source = "GEMINI_API_KEY"
+    extractor._build_prompt = lambda ocr_cells: "prompt"
+
+    crop_path = tmp_path / "record.jpg"
+    crop_path.write_bytes(b"fake-image")
+
+    result = extractor.extract_record(
+        record_crop_path=crop_path,
+        ocr_cells={"bil": OcrResult(text="9", average_confidence=0.95)},
+    )
+
+    assert result.record.bil == "9"
+    assert result.record.nama_suami == "TEST SUAMI"
+
+
+def test_parse_response_text_accepts_raw_newlines_in_strings() -> None:
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+
+    payload = GeminiRecordExtractor._parse_response_text(
+        extractor,
+        '{"bil":"1","alamat_pendaftar":"LINE 1\nLINE 2"}',
+    )
+
+    assert payload["bil"] == "1"
+    assert payload["alamat_pendaftar"] == "LINE 1\nLINE 2"
+
+
+def test_parse_response_text_extracts_wrapped_json_object() -> None:
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+
+    payload = GeminiRecordExtractor._parse_response_text(
+        extractor,
+        'Here is the result:\n{"bil":"1","alamat_pendaftar":"LINE 1",}\nThanks.',
+    )
+
+    assert payload["bil"] == "1"
+    assert payload["alamat_pendaftar"] == "LINE 1"
+
+
+def test_parse_response_text_recovers_truncated_string_field() -> None:
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+
+    payload = GeminiRecordExtractor._parse_response_text(
+        extractor,
+        '{"bil":"463/94","nama_suami":"HASNOOR AZWAN BIN JAMIL","id_isteri_raw":"A.1857',
+    )
+
+    assert payload["bil"] == "463/94"
+    assert payload["nama_suami"] == "HASNOOR AZWAN BIN JAMIL"
+    assert payload["id_isteri_raw"] == "A.1857"
+
+
+def test_parse_response_text_drops_dangling_trailing_field() -> None:
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+
+    payload = GeminiRecordExtractor._parse_response_text(
+        extractor,
+        '{"bil":"470/94","nama_suami":"ABDUL RAHMAN BIN JAKARIA","nama_wali":',
+    )
+
+    assert payload["bil"] == "470/94"
+    assert payload["nama_suami"] == "ABDUL RAHMAN BIN JAKARIA"
+    assert "nama_wali" not in payload

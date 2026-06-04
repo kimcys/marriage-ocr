@@ -52,6 +52,8 @@ This is the path that runs Google Vision OCR, the existing parser, and the Gemin
   --config-path config/production.yaml
 ```
 
+That writes the merged workbook to `runs/batch_output/exports/run_001_merged.xlsx` and stores the row data in Postgres.
+
 Then export Excel/CSV from Postgres:
 
 ```bash

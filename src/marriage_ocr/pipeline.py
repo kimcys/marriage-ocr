@@ -391,7 +391,7 @@ def _validate_record_with_optional_gemini(
         )
     except Exception as error:
         logger.warning(
-            "Gemini merge failed for %s page %s; falling back to parser-only validation: %s",
+            "Gemini semantic extraction failed for %s page %s; falling back to parser-only validation: %s",
             source_file,
             source_page,
             error,

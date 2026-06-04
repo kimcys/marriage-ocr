@@ -7,11 +7,13 @@ from pathlib import Path
 
 from marriage_ocr.db_postgres import (
     create_batch,
+    fetch_records_for_batch,
     insert_record,
     is_file_done,
     mark_file_done,
     mark_file_failed,
 )
+from marriage_ocr.exporter import export_records_to_xlsx
 from marriage_ocr.ocr_cache import file_sha256
 from marriage_ocr.pipeline import process_input
 
@@ -112,6 +114,18 @@ def run_batch(
                 file_path=file_path_str,
                 error_message=error_text,
             )
+
+    merged_records = fetch_records_for_batch(batch_id)
+    merged_output_path = Path(output_dir) / "exports" / f"{batch_name}_merged.xlsx"
+    merged_output_path.parent.mkdir(parents=True, exist_ok=True)
+    export_records_to_xlsx(
+        merged_records,
+        merged_output_path,
+        {"append": False, "dedupe": False, "sheet_name": "Records"},
+        reset_output=True,
+        skip_existing=False,
+    )
+    print(f"Merged XLSX exported to {merged_output_path}")
 
     print("Batch completed.")
 

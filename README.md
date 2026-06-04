@@ -44,6 +44,8 @@ Run the DB batch flow with Gemini enabled in `config/production.yaml`:
   --config-path config/production.yaml
 ```
 
+That writes the merged workbook to `runs/batch_output/exports/run_001_merged.xlsx` and stores the row data in Postgres.
+
 Export Excel/CSV from Postgres after the batch run:
 
 ```bash

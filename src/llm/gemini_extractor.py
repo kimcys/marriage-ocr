@@ -72,7 +72,7 @@ class GeminiRecordExtractor:
 
         response = self._generate_content(prompt, image_part)
 
-        payload = self._parse_response_text(getattr(response, "text", ""))
+        payload = self._extract_response_payload(response)
         if self.save_raw_json:
             raw_path = crop_path.parent / "gemini_record.json"
             raw_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -91,6 +91,16 @@ class GeminiRecordExtractor:
             contents=[prompt, image_part],
             config=config,
         )
+
+    def _extract_response_payload(self, response: Any) -> dict[str, Any]:
+        parsed = getattr(response, "parsed", None)
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+        if hasattr(parsed, "model_dump"):
+            dumped = parsed.model_dump()
+            if isinstance(dumped, dict):
+                return dumped
+        return self._parse_response_text(getattr(response, "text", ""))
 
     def _build_prompt(self, ocr_cells: Mapping[str, OcrResult]) -> str:
         cell_hints = {
@@ -130,10 +140,10 @@ Google Vision OCR cell hints:
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
             cleaned = re.sub(r"```$", "", cleaned).strip()
-        try:
-            payload = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Gemini returned invalid JSON: {cleaned[:500]}") from exc
+        cleaned = _extract_json_object_text(cleaned)
+        payload = _load_json_payload(cleaned)
+        if payload is None:
+            raise ValueError(f"Gemini returned invalid JSON: {cleaned[:500]}")
         if not isinstance(payload, dict):
             raise ValueError("Gemini returned JSON, but not an object")
         return payload
@@ -254,6 +264,105 @@ def _resolve_api_key_source(config: Mapping[str, Any]) -> tuple[str | None, str 
     return None, None
 
 
+def _load_json_payload(text: str) -> dict[str, Any] | None:
+    for candidate in _iter_json_parse_candidates(text):
+        try:
+            payload = json.loads(candidate, strict=False)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _iter_json_parse_candidates(text: str) -> list[str]:
+    normalized = re.sub(r",(\s*[}\]])", r"\1", text)
+    candidates: list[str] = [normalized]
+
+    repaired = _close_open_json_structures(normalized)
+    if repaired != normalized:
+        candidates.append(repaired)
+
+    for comma_index in reversed(_top_level_comma_positions(normalized)):
+        truncated = normalized[:comma_index]
+        repaired_truncated = _close_open_json_structures(truncated)
+        if repaired_truncated not in candidates:
+            candidates.append(repaired_truncated)
+
+    return candidates
+
+
+def _close_open_json_structures(text: str) -> str:
+    trimmed = text.rstrip()
+    if not trimmed:
+        return trimmed
+
+    stack: list[str] = []
+    in_string = False
+    escape = False
+
+    for char in trimmed:
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            stack.append("}")
+        elif char == "[":
+            stack.append("]")
+        elif char in "}]":
+            if stack and stack[-1] == char:
+                stack.pop()
+
+    repaired = trimmed
+    if in_string:
+        repaired += '"'
+
+    repaired = repaired.rstrip()
+    if repaired.endswith(":"):
+        repaired = repaired[:-1].rstrip()
+
+    repaired = re.sub(r",\s*$", "", repaired)
+    repaired += "".join(reversed(stack))
+    repaired = re.sub(r",(\s*[}\]])", r"\1", repaired)
+    return repaired
+
+
+def _top_level_comma_positions(text: str) -> list[int]:
+    positions: list[int] = []
+    depth = 0
+    in_string = False
+    escape = False
+
+    for index, char in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 1:
+            positions.append(index)
+
+    return positions
+
+
 def _clean_str(value: Any) -> str | None:
     if value is None:
         return None
@@ -329,3 +438,35 @@ def _normalize_field_confidence(value: Any) -> dict[str, float]:
 def _guess_mime_type(path: Path) -> str:
     mime_type, _ = mimetypes.guess_type(path.name)
     return mime_type or "image/jpeg"
+
+
+def _extract_json_object_text(text: str) -> str:
+    start = text.find("{")
+    if start == -1:
+        return text
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for index in range(start, len(text)):
+        character = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif character == "\\":
+                escape = True
+            elif character == '"':
+                in_string = False
+            continue
+
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+
+    return text[start:]

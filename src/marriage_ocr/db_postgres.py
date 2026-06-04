@@ -2,6 +2,7 @@
 
 import os
 import re
+import json
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, unquote
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
+
+from marriage_ocr.models import ExtractedRecord
 
 
 load_dotenv()
@@ -125,6 +128,33 @@ def count_records() -> int:
         value = row[0]
 
     return int(value)
+
+
+def fetch_records_for_batch(batch_id: int) -> list[ExtractedRecord]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT raw_record
+                FROM records
+                WHERE batch_id = %s
+                ORDER BY source_file, source_page, source_record, id
+                """,
+                (batch_id,),
+            )
+            rows = cur.fetchall()
+
+    records: list[ExtractedRecord] = []
+    for row in rows:
+        raw_record = row.get("raw_record") if isinstance(row, dict) else row[0]
+        if raw_record is None:
+            continue
+        if isinstance(raw_record, str):
+            raw_record = json.loads(raw_record)
+        if isinstance(raw_record, dict):
+            records.append(ExtractedRecord.from_dict(raw_record))
+
+    return records
 
 
 def _build_conninfo() -> dict[str, Any]:
