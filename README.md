@@ -22,6 +22,7 @@ cp .env.example .env
 For the packaged default flow, that is enough. The default OCR engine is now Google Vision, so before running real OCR you must export `GOOGLE_APPLICATION_CREDENTIALS` to a valid Google Cloud service-account JSON file. PaddleOCR remains available only as an optional alternative engine.
 
 If you want the Gemini semantic extractor, export a single `GEMINI_API_KEY`.
+By default, the runtime keeps only the CSV/XLSX exports and does not retain page crops or JSON debug artifacts. Enable `debug.retain_artifacts: true` in the config only when you need review or training outputs.
 
 Run the pipeline with the packaged production settings:
 
@@ -44,7 +45,7 @@ Run the DB batch flow with Gemini enabled in `config/production.yaml`:
   --config-path config/production.yaml
 ```
 
-That writes the merged workbook to `runs/batch_output/exports/run_001_merged.xlsx` and stores the row data in Postgres.
+That writes the merged workbook to `runs/batch_output/exports/run_001_merged.xlsx` and stores the row data in Postgres. Debug crops and JSON files are not retained unless you explicitly enable them in config.
 
 Export Excel/CSV from Postgres after the batch run:
 

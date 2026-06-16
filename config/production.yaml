@@ -72,7 +72,7 @@ export:
   dedupe: true
   sheet_name: Records
   include_raw_columns: true
-  include_debug_paths: true
+  include_debug_paths: false
 
 review:
   reviewer_name: production-reviewer
@@ -87,6 +87,9 @@ llm:
   save_raw_json: true
   prefer_gemini_threshold: 0.70
   review_below_field_confidence: 0.80
+
+debug:
+  retain_artifacts: false
 
 training_export:
   output_dir: data/ground_truth

@@ -21,6 +21,12 @@ def test_create_job_creates_directories_and_metadata(tmp_path: Path) -> None:
     assert payload["status"] == "CREATED"
 
 
+def test_create_job_can_skip_debug_dir(tmp_path: Path) -> None:
+    job = create_job(tmp_path, create_debug_dir=False)
+
+    assert not Path(job.debug_dir).exists()
+
+
 def test_save_and_load_job_round_trip(tmp_path: Path) -> None:
     job = OcrJob(
         job_id="20260525_120000_abc12345",

@@ -20,6 +20,7 @@ ENV_ALIAS_PATHS: dict[str, tuple[str, ...]] = {
     "MARRIAGE_OCR_LOG_LEVEL": ("logging", "level"),
     "MARRIAGE_OCR_LOG_DIR": ("logging", "directory"),
     "MARRIAGE_OCR_ERROR_DIR": ("logging", "error_report_dir"),
+    "MARRIAGE_OCR_DEBUG_RETAIN_ARTIFACTS": ("debug", "retain_artifacts"),
     "MARRIAGE_OCR_REVIEW_EXPORT_PATH": ("review", "export_path"),
     "MARRIAGE_OCR_REVIEWER_NAME": ("review", "reviewer_name"),
     "MARRIAGE_OCR_TRAINING_OUTPUT_DIR": ("training_export", "output_dir"),

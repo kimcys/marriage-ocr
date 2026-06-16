@@ -371,7 +371,11 @@ def parse_record_ocr(
     return record
 
 
-def parse_record_ocr_output(record_output: RecordOcrOutput) -> ExtractedRecord:
+def parse_record_ocr_output(
+    record_output: RecordOcrOutput,
+    *,
+    include_crop_folder: bool = True,
+) -> ExtractedRecord:
     raw_json_text = None
     if record_output.raw_json_path is not None and record_output.raw_json_path.exists():
         raw_json_text = record_output.raw_json_path.read_text(encoding="utf-8")
@@ -379,7 +383,7 @@ def parse_record_ocr_output(record_output: RecordOcrOutput) -> ExtractedRecord:
     return parse_record_ocr(
         record_output.cell_results,
         source_record=f"record_{record_output.record_index:03d}",
-        crop_folder=str(record_output.record_dir),
+        crop_folder=str(record_output.record_dir) if include_crop_folder else None,
         raw_ocr_json=raw_json_text,
     )
 

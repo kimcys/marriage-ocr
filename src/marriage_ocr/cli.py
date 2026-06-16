@@ -67,7 +67,7 @@ def main() -> None:
 def process(
     input: Path = typer.Option(..., "--input", "-i", help="Input image, PDF, or folder"),
     output: Path = typer.Option(..., "--output", "-o", help="Output XLSX path"),
-    debug: Path = typer.Option(Path("debug"), "--debug", help="Debug output folder"),
+    debug: Path = typer.Option(Path("debug"), "--debug", help="Debug output folder when artifacts are retained"),
     config: Path = typer.Option(Path("config/default.yaml"), "--config", help="Config file"),
     reset_output: bool = typer.Option(False, "--reset-output", help="Delete old XLSX before processing"),
     layout_only: bool = typer.Option(False, "--layout-only", help="Only detect layout/crops"),
@@ -78,11 +78,12 @@ def process(
     try:
         cfg, _, runtime = _load_command_runtime("process", config)
         logger = get_logger("marriage_ocr.process")
+        retain_debug_artifacts = bool(cfg.get("debug", {}).get("retain_artifacts", False))
 
         console.print("[bold green]Marriage OCR process started[/bold green]")
         console.print(f"Input: {input}")
         console.print(f"Output: {output}")
-        console.print(f"Debug: {debug}")
+        console.print(f"Debug artifacts: {'retained at ' + str(debug) if retain_debug_artifacts else 'disabled'}")
         console.print(f"Config: {config}")
         console.print(f"Log file: {runtime.log_path}")
         console.print(f"OCR engine: {cfg.get('ocr', {}).get('engine')}")
@@ -111,6 +112,7 @@ def process(
             output_path=output,
             debug_path=debug,
             config_path=config,
+            retain_debug_artifacts=retain_debug_artifacts,
             reset_output=reset_output,
             layout_only=layout_only,
             skip_existing=skip_existing,

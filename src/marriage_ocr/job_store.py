@@ -25,7 +25,7 @@ class OcrJob:
     total_parsed_records: int = 0
 
 
-def create_job(root: Path = DEFAULT_JOBS_ROOT) -> OcrJob:
+def create_job(root: Path = DEFAULT_JOBS_ROOT, *, create_debug_dir: bool = True) -> OcrJob:
     now = _timestamp_now()
     job_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8]
     job_dir = root / job_id
@@ -35,7 +35,8 @@ def create_job(root: Path = DEFAULT_JOBS_ROOT) -> OcrJob:
 
     input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
-    debug_dir.mkdir(parents=True, exist_ok=True)
+    if create_debug_dir:
+        debug_dir.mkdir(parents=True, exist_ok=True)
 
     job = OcrJob(
         job_id=job_id,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+import tempfile
 from typing import Any, Callable, Mapping
 
 from marriage_ocr.config import load_runtime_config
@@ -42,6 +43,7 @@ def process_input(
     output_path: Path | None,
     debug_path: Path,
     config_path: Path,
+    retain_debug_artifacts: bool | None = None,
     reset_output: bool = False,
     layout_only: bool = False,
     skip_existing: bool = False,
@@ -62,10 +64,19 @@ def process_input(
     loaded = load_runtime_config(config_path)
     cfg = loaded.data
     logger = get_logger("marriage_ocr.process")
+    debug_cfg = cfg.get("debug", {})
+    if retain_debug_artifacts is None:
+        retain_debug_artifacts = bool(debug_cfg.get("retain_artifacts", False))
 
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-    debug_path.mkdir(parents=True, exist_ok=True)
+    temp_debug_workspace: tempfile.TemporaryDirectory[str] | None = None
+    debug_root = debug_path
+    if retain_debug_artifacts:
+        debug_root.mkdir(parents=True, exist_ok=True)
+    else:
+        temp_debug_workspace = tempfile.TemporaryDirectory(prefix="marriage-ocr-debug-")
+        debug_root = Path(temp_debug_workspace.name)
 
     input_cfg = cfg.get("input", {})
     preprocessing_cfg = cfg.get("preprocessing", {})
@@ -73,11 +84,13 @@ def process_input(
     export_cfg = cfg.get("export", {})
     layout_cfg = cfg.get("layout", {})
     validation_cfg = cfg.get("validation", {})
-    llm_cfg = cfg.get("llm", {})
+    llm_cfg = dict(cfg.get("llm", {}))
     validation_input = {
         **validation_cfg,
         "min_average_confidence": ocr_cfg.get("min_average_confidence", 0.50),
     }
+    ocr_save_raw_json = bool(ocr_cfg.get("save_raw_json", True)) and retain_debug_artifacts
+    llm_cfg["save_raw_json"] = bool(llm_cfg.get("save_raw_json", True)) and retain_debug_artifacts
     gemini_processor = None if layout_only else _build_gemini_record_processor(
         llm_cfg,
         validation_config=validation_input,
@@ -125,7 +138,7 @@ def process_input(
     ocr_engine = None if layout_only else build_ocr_engine(ocr_cfg)
 
     for index, page in enumerate(pages, start=1):
-        page_debug_dir = debug_path / page.debug_name
+        page_debug_dir = debug_root / page.debug_name
         write_image(page_debug_dir / "original.jpg", page.image)
 
         processed = preprocess_image(page.image, settings)
@@ -150,7 +163,7 @@ def process_input(
                     layout,
                     saved_records,
                     ocr_engine,
-                    save_raw_json=bool(ocr_cfg.get("save_raw_json", True)),
+                    save_raw_json=ocr_save_raw_json,
                 )
                 total_ocr_cells += 1
                 page_ocr_cells = 1
@@ -158,13 +171,17 @@ def process_input(
                 record_ocr_outputs = run_ocr_on_record_crops(
                     saved_records,
                     ocr_engine,
-                    save_raw_json=bool(ocr_cfg.get("save_raw_json", True)),
+                    save_raw_json=ocr_save_raw_json,
                 )
                 total_ocr_cells += page_ocr_cells
 
             for record_output, record_layout in zip(record_ocr_outputs, layout.records, strict=True):
-                parsed_record = parse_record_ocr_output(record_output)
-                save_parsed_record(parsed_record, record_output.record_dir / "parsed_record.json")
+                parsed_record = parse_record_ocr_output(
+                    record_output,
+                    include_crop_folder=retain_debug_artifacts,
+                )
+                if retain_debug_artifacts:
+                    save_parsed_record(parsed_record, record_output.record_dir / "parsed_record.json")
                 layout_confidence = estimate_layout_confidence(
                     marker_present=record_layout.marker_box is not None,
                     cell_count=len(record_layout.cells),
@@ -189,7 +206,8 @@ def process_input(
                     source_page=page.source_page,
                     source_record=validated_record.source_record or f"record_{record_output.record_index:03d}",
                 )
-                save_parsed_record(validated_record, record_output.record_dir / "validated_record.json")
+                if retain_debug_artifacts:
+                    save_parsed_record(validated_record, record_output.record_dir / "validated_record.json")
                 status_counts[validated_record.status_review] = status_counts.get(validated_record.status_review, 0) + 1
                 validated_records.append(validated_record)
                 page_parsed_records += 1
@@ -204,7 +222,11 @@ def process_input(
                 if ocr_engine is not None
                 else "; layout-only mode skipped OCR"
             )
-            + f"; saved debug to {page_debug_dir}"
+            + (
+                f"; retained debug artifacts at {page_debug_dir}"
+                if retain_debug_artifacts
+                else "; debug artifacts were not retained"
+            )
         )
         _emit_progress(
             progress_callback,
@@ -249,7 +271,7 @@ def process_input(
         )
 
     completion_message = "[bold green]Marriage OCR process complete[/bold green] " + (
-        f"generated preprocessing, layout, crops, OCR JSON for {total_ocr_cells} cell crop(s), "
+        f"generated preprocessing, layout, OCR results for {total_ocr_cells} cell crop(s), "
         f"and parsed/validated {total_parsed_records} record(s) across {total_records} record(s) on {len(pages)} page(s)"
         f" [{status_summary}]"
         + (
@@ -257,6 +279,11 @@ def process_input(
             f"{export_summary.skipped_duplicates} duplicate(s) to {export_summary.output_path}"
             if export_summary is not None
             else ""
+        )
+        + (
+            f"; retained debug artifacts at {debug_root}"
+            if retain_debug_artifacts
+            else "; debug artifacts were not retained"
         )
         if ocr_engine is not None
         else f"generated preprocessing, layout, and {total_records} record crop(s) across {len(pages)} page(s)"
@@ -283,7 +310,7 @@ def process_input(
     if loaded.env_file is not None:
         logger.debug("Effective environment sourced from %s", loaded.env_file)
 
-    return ProcessResult(
+    result = ProcessResult(
         records=validated_records,
         total_pages=len(pages),
         total_detected_records=total_records,
@@ -292,6 +319,9 @@ def process_input(
         output_path=export_summary.output_path if export_summary is not None else None,
         debug_path=debug_path,
     )
+    if temp_debug_workspace is not None:
+        temp_debug_workspace.cleanup()
+    return result
 
 
 def _emit_progress(

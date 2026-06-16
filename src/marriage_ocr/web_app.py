@@ -147,7 +147,7 @@ def render_upload_run(settings: dict[str, Any]) -> None:
             overall_text.write(f"Running batch {batch_index}/{len(file_batches)}")
             batch_progress.progress(0.0)
 
-            job = create_job()
+            job = create_job(create_debug_dir=False)
             _save_uploaded_files(batch_files, Path(job.input_dir))
 
             job.status = "RUNNING"

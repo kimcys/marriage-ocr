@@ -21,6 +21,7 @@ export GOOGLE_APPLICATION_CREDENTIALS="/absolute/path/to/service-account.json"
 ```
 
 The repository still keeps PaddleOCR as an optional alternative engine, but it is no longer the default path.
+By default, debug artifacts are not retained. The processing commands leave only the tabular export unless `debug.retain_artifacts: true` is enabled in the config.
 
 ## 2. Process Input Files
 
@@ -36,8 +37,7 @@ The repository still keeps PaddleOCR as an optional alternative engine, but it i
 What you get:
 
 - `output/daftar_perkahwinan.xlsx`
-- page-level debug overlays under `debug/`
-- per-record crops, raw OCR, parsed JSON, validated JSON
+- no retained page crops or JSON artifacts by default
 - log file under `logs/`
 
 ## 3. Batch Into Postgres With Gemini
@@ -53,6 +53,7 @@ This is the path that runs Google Vision OCR, the existing parser, and the Gemin
 ```
 
 That writes the merged workbook to `runs/batch_output/exports/run_001_merged.xlsx` and stores the row data in Postgres.
+It does not keep the page crops or JSON debug artifacts unless you enable debug retention in the config.
 
 Then export Excel/CSV from Postgres:
 
@@ -72,6 +73,7 @@ Then export Excel/CSV from Postgres:
 ```
 
 Open `http://127.0.0.1:8501`.
+This workflow requires retained debug artifacts, so set `debug.retain_artifacts: true` before processing if you plan to review records later.
 
 In the review UI you can:
 
@@ -104,6 +106,8 @@ This produces:
 - `data/ground_truth/manifest.jsonl`
 - `data/ground_truth/stats.json`
 - `data/ground_truth/training_crops/<cell_name>/*.jpg`
+
+It also requires retained debug artifacts from the original OCR run.
 
 The label format is:
 
