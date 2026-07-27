@@ -19,8 +19,22 @@ def test_wali_parser_extracts_relationship() -> None:
     assert parsed.hubungan == "BAPA"
 
 
+def test_wali_parser_corrects_fuzzy_relationship() -> None:
+    parsed = parse_wali_cells("ABDUL RAHMAN", "WALI HAK1M")
+
+    assert parsed.nama == "ABDUL RAHMAN"
+    assert parsed.hubungan == "WALI HAKIM"
+
+
 def test_saksi_parser_removes_numbering() -> None:
     parsed = parse_saksi_cell("1) AHMAD BIN ALI\n2) OSMAN BIN DIN")
+    assert parsed.saksi_1 == "AHMAD BIN ALI"
+    assert parsed.saksi_2 == "OSMAN BIN DIN"
+
+
+def test_saksi_parser_cleans_common_typos() -> None:
+    parsed = parse_saksi_cell("1) aHMAD b1N ali\n2) osman b1n din")
+
     assert parsed.saksi_1 == "AHMAD BIN ALI"
     assert parsed.saksi_2 == "OSMAN BIN DIN"
 

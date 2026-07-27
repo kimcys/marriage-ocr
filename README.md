@@ -75,6 +75,32 @@ Export OCR training data from reviewed records:
   --reset-output
 ```
 
+Process typed Borang 4B PDFs into a separate CSV:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.json
+python -m marriage_ocr.cli process-typed \
+  --input input/typed \
+  --output output/typed_records.csv \
+  --debug debug/typed \
+  --config config/typed_borang4b.yaml \
+  --reset-output
+```
+
+Typed input and output stay separate from the handwritten pipeline:
+
+```text
+input/
+├── handwritten/
+└── typed/
+
+output/
+├── handwritten_records.csv
+└── typed_records.csv
+```
+
+The typed workflow writes one CSV row per PDF, supports only two-page Borang 4B forms, and keeps `Tarikh Keluar` blank. Use `--skip-existing` to skip already-successful typed rows while reprocessing review or failed rows.
+
 ## Runtime Files
 
 - Config: `config/default.yaml`, `config/production.yaml`
@@ -83,6 +109,8 @@ Export OCR training data from reviewed records:
 - Error reports: `logs/error_reports/*.json`
 - Review export: `data/reviewed_exports/*.xlsx`
 - Training data: `data/ground_truth/`
+- Typed output: `output/typed_records.csv`
+- Typed debug artifacts: `debug/typed/`
 
 ## Docker
 

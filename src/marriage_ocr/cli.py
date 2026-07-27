@@ -246,6 +246,73 @@ def web(
     subprocess.run(command, check=True, env=os.environ.copy())
 
 
+@app.command("process-typed")
+def process_typed(
+    input_path: Path = typer.Option(..., "--input", help="Input PDF folder or file"),
+    output_path: Path = typer.Option(Path("output/typed_records.csv"), "--output", help="Typed CSV output path"),
+    debug_path: Path = typer.Option(Path("debug/typed"), "--debug", help="Typed debug output folder"),
+    config_path: Path = typer.Option(Path("config/typed_borang4b.yaml"), "--config", help="Typed config file"),
+    reset_output: bool = typer.Option(False, "--reset-output", help="Delete old typed CSV before processing"),
+    skip_existing: bool = typer.Option(False, "--skip-existing", help="Skip typed rows already processed successfully"),
+) -> None:
+    runtime: LoggingRuntime | None = None
+
+    try:
+        cfg, _, runtime = _load_command_runtime("process-typed", config_path)
+        logger = get_logger("marriage_ocr.process_typed")
+        console.print("[bold green]Marriage OCR typed process started[/bold green]")
+        console.print(f"Input: {input_path}")
+        console.print(f"Output: {output_path}")
+        console.print(f"Debug artifacts: {debug_path}")
+        console.print(f"Config: {config_path}")
+        console.print(f"Log file: {runtime.log_path}")
+        console.print(f"Reset output: {reset_output}")
+        console.print(f"Skip existing: {skip_existing}")
+        logger.info(
+            "Typed process started input=%s output=%s debug=%s reset_output=%s skip_existing=%s",
+            input_path,
+            output_path,
+            debug_path,
+            reset_output,
+            skip_existing,
+        )
+
+        if not input_path.exists():
+            raise typer.BadParameter(f"Input path does not exist: {input_path}")
+        if not config_path.exists():
+            raise typer.BadParameter(f"Config path does not exist: {config_path}")
+
+        from marriage_ocr.typed.pipeline import process_typed_input
+
+        result = process_typed_input(
+            input_path=input_path,
+            output_path=output_path,
+            debug_path=debug_path,
+            config_path=config_path,
+            reset_output=reset_output,
+            skip_existing=skip_existing,
+        )
+        console.print(
+            f"Typed OCR complete: discovered={result.discovered_pdfs} written={result.written_rows} skipped={len(result.skipped_files)}"
+        )
+    except typer.BadParameter:
+        raise
+    except Exception as error:
+        _handle_command_error(
+            error,
+            command_name="process-typed",
+            config_path=config_path,
+            runtime=runtime,
+            extra_context={
+                "input": str(input_path),
+                "output": str(output_path),
+                "debug": str(debug_path),
+                "reset_output": reset_output,
+                "skip_existing": skip_existing,
+            },
+        )
+
+
 @app.command("export-training")
 def export_training(
     debug: Path = typer.Option(Path("debug"), "--debug", help="Debug output folder with reviewed records"),

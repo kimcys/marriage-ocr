@@ -1,0 +1,29 @@
+ocr:
+  google_vision:
+    language_hints:
+      - ms
+      - en
+
+typed:
+  template: borang_4b
+  pdf_dpi: 300
+  pdf_batch_size: 4
+  render_workers: 4
+  vision_request_workers: 1
+  word_confidence_threshold: 0.75
+  region_boundary_tolerance: 0.01
+
+  retry:
+    api_attempts: 3
+    initial_delay_seconds: 1
+    backoff_multiplier: 2
+    field_attempts: 1
+    max_fields_per_pdf: 6
+    crop_padding_ratio: 0.05
+    request_batch_size: 16
+
+  validation:
+    min_age: 16
+    max_age: 120
+    require_all_strict_fields: true
+

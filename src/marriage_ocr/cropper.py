@@ -21,6 +21,8 @@ DEBUG_CELL_ORDER = [
     "remarks",
 ]
 
+CELL_CROP_PADDING = 12
+
 
 ImageWriter = Callable[[Path, np.ndarray], None]
 
@@ -48,7 +50,7 @@ def save_record_crops(
             cell_box = record.cells.get(cell_name)
             if cell_box is None:
                 continue
-            cell_rows, cell_columns = cell_box.slices()
+            cell_rows, cell_columns = _padded_slices(cell_box, CELL_CROP_PADDING, layout.ocr_ready_color.shape)
             cell_path = record_dir / f"{cell_name}.jpg"
             write_image(cell_path, layout.ocr_ready_color[cell_rows, cell_columns])
             cell_paths[cell_name] = cell_path
@@ -63,3 +65,12 @@ def save_record_crops(
         )
 
     return saved_records
+
+
+def _padded_slices(box, padding: int, image_shape: tuple[int, int, int] | tuple[int, int]) -> tuple[slice, slice]:
+    image_height, image_width = image_shape[:2]
+    top = max(0, box.y - padding)
+    bottom = min(image_height, box.bottom + padding)
+    left = max(0, box.x - padding)
+    right = min(image_width, box.right + padding)
+    return slice(top, bottom), slice(left, right)

@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,7 +9,10 @@ from marriage_ocr.ocr import (
     _google_vision_annotation_to_result,
     _normalize_paddle_output,
     _run_paddle_inference,
+    RecordCropPaths,
 )
+from marriage_ocr.layout import Box
+from marriage_ocr.models import OcrLine, OcrResult
 
 
 def test_paddle_guidance_mentions_unsupported_python() -> None:
@@ -158,3 +162,53 @@ def test_build_ocr_engine_supports_google_vision_aliases() -> None:
 
     google_cls.assert_called_once_with({"language_hints": ["ms", "en"]})
     assert engine is sentinel
+
+
+def test_run_ocr_on_page_layout_uses_crop_fallback_for_weak_assignment(tmp_path: Path) -> None:
+    page_path = tmp_path / "page.jpg"
+    page_path.write_text("page", encoding="utf-8")
+
+    record_dir = tmp_path / "record_001"
+    record_dir.mkdir()
+    crop_path = record_dir / "bil.jpg"
+    crop_path.write_text("crop", encoding="utf-8")
+
+    layout = SimpleNamespace(records=[SimpleNamespace(cells={"bil": Box.from_bounds(10, 10, 30, 30)})])
+    records = [
+        RecordCropPaths(
+            record_index=1,
+            record_dir=record_dir,
+            full_record_path=record_dir / "full_record.jpg",
+            cell_paths={"bil": crop_path},
+        )
+    ]
+
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def read_image(self, image_path: str | Path) -> OcrResult:
+            path = Path(image_path)
+            self.calls.append(path.name)
+
+            if path.name == "page.jpg":
+                return OcrResult(text="", lines=[], average_confidence=0.12)
+            if path.name == "bil.jpg":
+                return OcrResult(
+                    text="12/94",
+                    lines=[OcrLine(text="12/94", confidence=0.92, bbox=[1.0, 1.0, 20.0, 20.0])],
+                    average_confidence=0.92,
+                )
+            raise AssertionError(f"Unexpected OCR path: {path}")
+
+    engine = FakeEngine()
+    outputs = ocr_module.run_ocr_on_page_layout(
+        page_path,
+        layout,
+        records,
+        engine,
+        save_raw_json=False,
+    )
+
+    assert engine.calls == ["page.jpg", "bil.jpg"]
+    assert outputs[0].cell_results["bil"].text == "12/94"

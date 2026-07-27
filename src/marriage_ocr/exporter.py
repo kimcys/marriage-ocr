@@ -57,6 +57,32 @@ XLSX_COLUMNS = [
     "Updated At",
 ]
 
+PUBLIC_XLSX_COLUMNS = [
+    "Bil",
+    "Nama Suami",
+    "IC Lama Suami",
+    "IC Baru Suami",
+    "Umur Suami",
+    "Nama Isteri",
+    "IC Lama Isteri",
+    "IC Baru Isteri",
+    "Umur Isteri",
+    "Mas Kahwin",
+    "Nama Pendaftar",
+    "Alamat Pendaftar",
+    "Nama Wali",
+    "Hubungan Wali",
+    "Saksi 1",
+    "Saksi 2",
+    "Tarikh Nikah",
+    "Tarikh Keluar",
+    "Remarks",
+    "Confidence",
+    "Status",
+    "Created At",
+    "Updated At",
+]
+
 EXPORT_COLUMN_TO_FIELD = {
     "Bil": "bil",
     "Nama Suami": "nama_suami",
@@ -83,6 +109,7 @@ EXPORT_COLUMN_TO_FIELD = {
     "Tarikh Keluar Raw": "tarikh_keluar_raw",
     "Remarks": "remarks",
     "Confidence": "confidence",
+    "Status": "status_review",
     "Status Review": "status_review",
     "Review Reason": "review_reason",
     "Source File": "source_file",
@@ -123,6 +150,8 @@ def export_records_to_xlsx(
     append_mode = bool(export_config.get("append", True))
     dedupe_enabled = bool(export_config.get("dedupe", True)) or skip_existing
     sheet_name = str(export_config.get("sheet_name", "Records"))
+    visible_columns, hidden_columns = _resolve_xlsx_columns(export_config)
+    sheet_columns = [*visible_columns, *hidden_columns]
 
     record_list = list(records)
     workbook, worksheet = _load_or_create_workbook(
@@ -131,7 +160,8 @@ def export_records_to_xlsx(
         append_mode=append_mode,
         sheet_name=sheet_name,
     )
-    _ensure_headers(worksheet)
+    _ensure_headers(worksheet, sheet_columns, visible_columns)
+    _hide_columns(worksheet, visible_columns, hidden_columns)
 
     existing_keys = _read_existing_keys(worksheet) if dedupe_enabled else set()
     now = _timestamp_now()
@@ -144,8 +174,8 @@ def export_records_to_xlsx(
             skipped_duplicates += 1
             continue
 
-        export_row = record_to_export_dict(record, timestamp=now)
-        worksheet.append([export_row[column] for column in XLSX_COLUMNS])
+        export_row = record_to_export_dict(record, timestamp=now, columns=sheet_columns)
+        worksheet.append([export_row[column] for column in sheet_columns])
         written_count += 1
         if dedupe_key is not None:
             existing_keys.add(dedupe_key)
@@ -180,34 +210,26 @@ def _load_or_create_workbook(
     return workbook, worksheet
 
 
-def _ensure_headers(worksheet: Worksheet) -> None:
+def _ensure_headers(worksheet: Worksheet, sheet_columns: list[str], visible_columns: list[str]) -> None:
     if worksheet.max_row == 1 and worksheet.max_column == 1 and worksheet["A1"].value is None:
-        for index, value in enumerate(XLSX_COLUMNS, start=1):
+        for index, value in enumerate(sheet_columns, start=1):
             worksheet.cell(row=1, column=index).value = value
         worksheet.freeze_panes = "A2"
-        worksheet.auto_filter.ref = f"A1:{_column_letter(len(XLSX_COLUMNS))}1"
+        worksheet.auto_filter.ref = f"A1:{_column_letter(len(visible_columns))}1"
         return
 
-    header = [worksheet.cell(row=1, column=index + 1).value for index in range(len(XLSX_COLUMNS))]
-    if header != XLSX_COLUMNS:
+    header = [worksheet.cell(row=1, column=index + 1).value for index in range(len(sheet_columns))]
+    if header != sheet_columns:
         raise ValueError("Existing XLSX header does not match expected schema")
 
 
 def _read_existing_keys(worksheet: Worksheet) -> set[tuple[str, ...]]:
-    column_indexes = {name: index + 1 for index, name in enumerate(XLSX_COLUMNS)}
+    column_names = [worksheet.cell(row=1, column=index + 1).value for index in range(worksheet.max_column)]
+    column_indexes = {str(name): index + 1 for index, name in enumerate(column_names) if name is not None}
     keys: set[tuple[str, ...]] = set()
 
     for row_index in range(2, worksheet.max_row + 1):
-        source_file = worksheet.cell(row=row_index, column=column_indexes["Source File"]).value
-        source_page = worksheet.cell(row=row_index, column=column_indexes["Source Page"]).value
-        source_record = worksheet.cell(row=row_index, column=column_indexes["Source Record"]).value
-        crop_folder = worksheet.cell(row=row_index, column=column_indexes["Crop Folder"]).value
-        key = _build_dedupe_key(
-            source_file=source_file,
-            source_page=source_page,
-            source_record=source_record,
-            crop_folder=crop_folder,
-        )
+        key = _build_existing_row_key(worksheet, row_index, column_indexes)
         if key is not None:
             keys.add(key)
 
@@ -220,9 +242,25 @@ def _with_timestamps(record: ExtractedRecord, timestamp: str) -> ExtractedRecord
     return replace(record, created_at=created_at, updated_at=updated_at)
 
 
-def record_to_export_dict(record: ExtractedRecord, *, timestamp: str | None = None) -> dict[str, Any]:
+def record_to_export_dict(
+    record: ExtractedRecord,
+    *,
+    timestamp: str | None = None,
+    columns: Sequence[str] | None = None,
+) -> dict[str, Any]:
     record_for_export = _with_timestamps(record, timestamp or _timestamp_now())
-    return dict(zip(XLSX_COLUMNS, _record_to_row(record_for_export), strict=True))
+    row = dict(zip(XLSX_COLUMNS, _record_to_row(record_for_export), strict=True))
+    row["Status"] = row["Status Review"]
+
+    if columns is None:
+        return row
+
+    selected: dict[str, Any] = {}
+    for column in columns:
+        if column not in row:
+            raise ValueError(f"Unsupported export column: {column}")
+        selected[column] = row[column]
+    return selected
 
 
 def record_from_export_dict(data: Mapping[str, Any]) -> ExtractedRecord:
@@ -297,6 +335,79 @@ def _record_to_row(record: ExtractedRecord) -> list[Any]:
         record.created_at,
         record.updated_at,
     ]
+
+
+def _resolve_xlsx_columns(export_config: Mapping[str, Any]) -> tuple[list[str], list[str]]:
+    configured_columns = export_config.get("columns")
+    include_raw_columns = bool(export_config.get("include_raw_columns", True))
+
+    if configured_columns is not None:
+        visible_columns = _normalize_configured_columns(configured_columns)
+    elif include_raw_columns:
+        visible_columns = list(XLSX_COLUMNS)
+    else:
+        visible_columns = list(PUBLIC_XLSX_COLUMNS)
+
+    hidden_columns = [column for column in XLSX_COLUMNS if column not in visible_columns]
+    return visible_columns, hidden_columns
+
+
+def _normalize_configured_columns(configured_columns: Any) -> list[str]:
+    if isinstance(configured_columns, (str, bytes)) or not isinstance(configured_columns, Iterable):
+        raise ValueError("export.columns must be a sequence of column names")
+
+    visible_columns: list[str] = []
+    for column in configured_columns:
+        column_name = str(column).strip()
+        if not column_name:
+            continue
+        if column_name not in EXPORT_COLUMN_TO_FIELD:
+            raise ValueError(f"Unsupported export column: {column_name}")
+        if column_name not in visible_columns:
+            visible_columns.append(column_name)
+
+    if not visible_columns:
+        raise ValueError("export.columns must contain at least one column")
+
+    return visible_columns
+
+
+def _hide_columns(worksheet: Worksheet, visible_columns: Sequence[str], hidden_columns: Sequence[str]) -> None:
+    for index, _column in enumerate(visible_columns, start=1):
+        worksheet.column_dimensions[_column_letter(index)].hidden = False
+
+    for index, _column in enumerate(hidden_columns, start=len(visible_columns) + 1):
+        worksheet.column_dimensions[_column_letter(index)].hidden = True
+
+
+def _build_existing_row_key(
+    worksheet: Worksheet,
+    row_index: int,
+    column_indexes: Mapping[str, int],
+) -> tuple[str, ...] | None:
+    technical_columns = ("Source File", "Source Page", "Source Record", "Crop Folder")
+    if all(column in column_indexes for column in technical_columns):
+        source_file = worksheet.cell(row=row_index, column=column_indexes["Source File"]).value
+        source_page = worksheet.cell(row=row_index, column=column_indexes["Source Page"]).value
+        source_record = worksheet.cell(row=row_index, column=column_indexes["Source Record"]).value
+        crop_folder = worksheet.cell(row=row_index, column=column_indexes["Crop Folder"]).value
+        key = _build_dedupe_key(
+            source_file=source_file,
+            source_page=source_page,
+            source_record=source_record,
+            crop_folder=crop_folder,
+        )
+        if key is not None:
+            return key
+
+    row_values = []
+    for column_name, column_index in column_indexes.items():
+        if column_name == "Created At":
+            continue
+        if column_name == "Updated At":
+            continue
+        row_values.append(str(worksheet.cell(row=row_index, column=column_index).value))
+    return tuple(row_values) or None
 
 
 def _record_dedupe_key(record: ExtractedRecord) -> tuple[str, ...] | None:

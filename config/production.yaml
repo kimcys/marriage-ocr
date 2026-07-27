@@ -10,16 +10,16 @@ input:
     - ".tif"
     - ".tiff"
     - ".pdf"
-  pdf_dpi: 250
+  pdf_dpi: 300
 
 preprocessing:
-  processing_width: 2400
+  processing_width: 3000
   expected_landscape: true
-  denoise_kernel_size: 5
-  threshold_method: otsu
-  adaptive_block_size: 31
-  adaptive_c: 15
-  deskew_enabled: false
+  denoise_kernel_size: 3
+  threshold_method: adaptive
+  adaptive_block_size: 41
+  adaptive_c: 11
+  deskew_enabled: true
   deskew_max_angle: 7.5
   min_rotation_for_deskew: 0.15
   hough_threshold: 160
@@ -71,8 +71,32 @@ export:
   append: true
   dedupe: true
   sheet_name: Records
-  include_raw_columns: true
   include_debug_paths: false
+  include_raw_columns: false
+  columns:
+    - Bil
+    - Nama Suami
+    - IC Lama Suami
+    - IC Baru Suami
+    - Umur Suami
+    - Nama Isteri
+    - IC Lama Isteri
+    - IC Baru Isteri
+    - Umur Isteri
+    - Mas Kahwin
+    - Nama Pendaftar
+    - Alamat Pendaftar
+    - Nama Wali
+    - Hubungan Wali
+    - Saksi 1
+    - Saksi 2
+    - Tarikh Nikah
+    - Tarikh Keluar
+    - Remarks
+    - Confidence
+    - Status
+    - Created At
+    - Updated At
 
 review:
   reviewer_name: production-reviewer

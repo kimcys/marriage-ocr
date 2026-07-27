@@ -230,7 +230,15 @@ def run_ocr_on_page_layout(
             if cell_name == "tandatangan":
                 continue
             assigned = _assign_words_to_box(page_words, cell_box)
-            cell_results[cell_name] = _words_to_ocr_result(assigned)
+            cell_result = _words_to_ocr_result(assigned)
+
+            if _needs_crop_fallback(cell_name, cell_result):
+                crop_path = record_crop.cell_paths.get(cell_name)
+                if crop_path is not None and crop_path.exists():
+                    crop_result = engine.read_image(crop_path)
+                    cell_result = _choose_better_cell_result(cell_result, crop_result)
+
+            cell_results[cell_name] = cell_result
 
         raw_json_path: Path | None = None
         if save_raw_json:
@@ -270,6 +278,57 @@ def run_ocr_on_page_layout(
         )
 
     return outputs
+
+
+def _needs_crop_fallback(cell_name: str, result: OcrResult) -> bool:
+    if cell_name == "tandatangan":
+        return False
+
+    important_fields = {
+        "bil",
+        "suami_isteri",
+        "pendaftar",
+        "wali",
+        "hubungan_wali",
+        "saksi",
+        "tarikh_nikah",
+        "tarikh_keluar",
+    }
+
+    if cell_name not in important_fields:
+        return False
+
+    text = (result.text or "").strip()
+
+    if not text:
+        return True
+
+    if result.average_confidence < 0.60:
+        return True
+
+    if cell_name in {"tarikh_nikah", "tarikh_keluar"} and len(text) < 4:
+        return True
+
+    if cell_name == "bil" and len(text) < 2:
+        return True
+
+    return False
+
+
+def _choose_better_cell_result(full_page_result: OcrResult, crop_result: OcrResult) -> OcrResult:
+    full_text = (full_page_result.text or "").strip()
+    crop_text = (crop_result.text or "").strip()
+
+    if crop_text and not full_text:
+        return crop_result
+
+    if crop_result.average_confidence >= full_page_result.average_confidence + 0.10:
+        return crop_result
+
+    if len(crop_text) > len(full_text) * 1.5 and crop_result.average_confidence >= 0.50:
+        return crop_result
+
+    return full_page_result
 
 
 def _assign_words_to_box(words: Sequence[OcrLine], box: Any) -> list[OcrLine]:

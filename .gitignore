@@ -9,8 +9,12 @@ __pycache__/
 logs/
 debug/
 output/
+input/typed/
+debug/typed/
+output/typed_records.csv
 data/ground_truth/
 data/reviewed_exports/
+data/typed_acceptance_ground_truth.csv
 
 .env.local
 .env

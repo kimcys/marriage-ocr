@@ -2,7 +2,13 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from marriage_ocr.exporter import XLSX_COLUMNS, export_records_to_xlsx, record_from_export_dict, record_to_export_dict
+from marriage_ocr.exporter import (
+    PUBLIC_XLSX_COLUMNS,
+    XLSX_COLUMNS,
+    export_records_to_xlsx,
+    record_from_export_dict,
+    record_to_export_dict,
+)
 from marriage_ocr.models import ExtractedRecord
 
 
@@ -28,6 +34,31 @@ def test_exporter_writes_schema_and_row(tmp_path: Path) -> None:
     assert [worksheet.cell(row=1, column=index + 1).value for index in range(len(XLSX_COLUMNS))] == XLSX_COLUMNS
     assert worksheet["A2"].value == "1"
     assert worksheet["B2"].value == "MOHAMAD BIN YASMIN"
+
+
+def test_exporter_can_show_public_columns_only(tmp_path: Path) -> None:
+    output_path = tmp_path / "records.xlsx"
+    record = _make_record(source_record="record_001")
+    export_config = {
+        "append": True,
+        "dedupe": True,
+        "sheet_name": "Records",
+        "include_raw_columns": False,
+        "columns": PUBLIC_XLSX_COLUMNS,
+    }
+
+    summary = export_records_to_xlsx([record], output_path, export_config, reset_output=True)
+
+    workbook = load_workbook(output_path)
+    worksheet = workbook.active
+
+    assert summary.written_count == 1
+    assert [worksheet.cell(row=1, column=index + 1).value for index in range(len(PUBLIC_XLSX_COLUMNS))] == PUBLIC_XLSX_COLUMNS
+    assert worksheet.column_dimensions["X"].hidden is True
+    assert worksheet.column_dimensions["A"].hidden is False
+    expected_hidden = [column for column in XLSX_COLUMNS if column not in PUBLIC_XLSX_COLUMNS]
+    assert worksheet.max_column == len(PUBLIC_XLSX_COLUMNS) + len(expected_hidden)
+    assert worksheet["X1"].value == "ID Suami Raw"
 
 
 def test_exporter_skips_duplicates_on_rerun(tmp_path: Path) -> None:
@@ -73,6 +104,18 @@ def test_exporter_round_trips_export_dict() -> None:
     assert restored.confidence == record.confidence
     assert restored.status_review == record.status_review
     assert restored.source_page == record.source_page
+
+
+def test_exporter_round_trips_public_export_dict() -> None:
+    record = _make_record(source_record="record_001")
+
+    restored = record_from_export_dict(
+        record_to_export_dict(record, timestamp="2026-05-25T12:00:00", columns=PUBLIC_XLSX_COLUMNS)
+    )
+
+    assert restored.bil == record.bil
+    assert restored.status_review == record.status_review
+    assert restored.created_at == "2026-05-25T12:00:00"
 
 
 def _make_record(*, source_record: str, bil: str = "1") -> ExtractedRecord:

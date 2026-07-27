@@ -7,6 +7,13 @@ from pathlib import Path
 import re
 from typing import Mapping, Sequence
 
+from marriage_ocr.corrections import (
+    clean_name,
+    correct_relationship,
+    normalize_ic_ocr,
+    normalize_numeric_ocr,
+    normalize_ocr_text,
+)
 from marriage_ocr.models import ExtractedRecord, OcrResult
 from marriage_ocr.ocr import RecordOcrOutput
 
@@ -152,7 +159,7 @@ def parse_ages(text: str) -> list[int]:
 
 
 def parse_identifiers(text: str) -> ParsedIdentifiers:
-    normalized = _normalize_for_numeric_ocr(text)
+    normalized = _normalize_for_ic_ocr(text)
     old_ic_match = OLD_IC_PATTERN.search(normalized)
     new_ic_match = NEW_IC_PATTERN.search(normalized)
 
@@ -254,7 +261,7 @@ def parse_pendaftar_cell(text: str) -> ParsedPendaftar:
         return ParsedPendaftar(nama=None, alamat=None, issues=["pendaftar_empty"])
 
     corrected_lines = [_fix_common_malay_ocr(line) for line in lines]
-    nama = _normalize_name(corrected_lines[0])
+    nama = clean_name(corrected_lines[0])
     alamat_lines = [_normalize_free_text(line) for line in corrected_lines[1:]]
     issues: list[str] = []
     if not alamat_lines:
@@ -267,19 +274,22 @@ def parse_pendaftar_cell(text: str) -> ParsedPendaftar:
     )
 
 def parse_wali_cells(wali_text: str, hubungan_text: str) -> ParsedWali:
+    wali_text = normalize_ocr_text(wali_text)
+    hubungan_text = normalize_ocr_text(hubungan_text)
     wali_lines = _meaningful_lines(wali_text)
     hubungan_lines = _meaningful_lines(hubungan_text)
     issues: list[str] = []
 
     combined = " ".join(wali_lines + hubungan_lines)
     nama, hubungan = _split_wali_name_relationship(combined)
+    hubungan = correct_relationship(hubungan)
 
     if hubungan is None:
         issues.append("wali_relationship_missing")
     if nama is None:
         issues.append("wali_name_missing")
 
-    return ParsedWali(nama=nama, hubungan=hubungan, issues=issues)
+    return ParsedWali(nama=clean_name(nama), hubungan=hubungan, issues=issues)
 
 
 def parse_saksi_cell(text: str) -> ParsedSaksi:
@@ -294,7 +304,7 @@ def parse_saksi_cell(text: str) -> ParsedSaksi:
         midpoint = max(1, len(cleaned_lines) // 2)
         parts = [" ".join(cleaned_lines[:midpoint]), " ".join(cleaned_lines[midpoint:])] if len(cleaned_lines) > 2 else cleaned_lines
 
-    names = [_normalize_name(_fix_common_malay_ocr(part)) for part in parts]
+    names = [clean_name(part) for part in parts]
     names = [name for name in names if name]
 
     saksi_1 = names[0] if len(names) >= 1 else None
@@ -470,15 +480,33 @@ def _split_name_detail_line(line: str) -> dict[str, str | None]:
 
 
 def _split_wali_name_relationship(text: str) -> tuple[str | None, str | None]:
-    normalized = _fix_common_malay_ocr(text)
-    hubungan = _extract_relationship(normalized)
-    name_text = normalized
-    name_text = re.sub(r"\([^)]*\)", " ", name_text)
-    for value in sorted(RELATIONSHIP_VALUES, key=len, reverse=True):
-        name_text = re.sub(rf"\b{re.escape(value)}\b", " ", name_text)
+    normalized = normalize_ocr_text(text)
+    relation = None
+    parenthetical = re.search(r"\(([^)]{2,})\)", normalized)
+    if parenthetical is not None:
+        relation = correct_relationship(parenthetical.group(1))
+
+    name_text = re.sub(r"\([^)]*\)", " ", normalized)
+    name_text = re.sub(r"\s+", " ", name_text).strip()
+
+    words = name_text.split()
+    relation_word_count = 0
+    if relation is None:
+        for size in range(min(4, len(words)), 0, -1):
+            candidate = " ".join(words[-size:])
+            candidate_relation = correct_relationship(candidate)
+            if candidate_relation is not None:
+                relation = candidate_relation
+                relation_word_count = size
+                break
+
+    if relation_word_count:
+        words = words[:-relation_word_count]
+
+    name_text = " ".join(words)
     name_text = re.sub(r"\bC\s*(?=BAPA|LELAKI|SAUDARA)\b", " ", name_text)
-    nama = _normalize_name(name_text)
-    return nama, hubungan
+    nama = clean_name(name_text)
+    return nama, relation
 
 
 def _normalize_number_markers(text: str) -> str:
@@ -511,11 +539,11 @@ def _split_numbered_people(text: str) -> list[str]:
 
 
 def _normalize_for_numeric_ocr(text: str) -> str:
-    normalized = _normalize_text(text)
-    normalized = re.sub(r"(?<=\d)[OQ](?=\d|\b)", "0", normalized)
-    normalized = re.sub(r"(?<=\d)[IL](?=\d)", "1", normalized)
-    normalized = re.sub(r"(?<=\d)S(?=\d)", "5", normalized)
-    return normalized
+    return normalize_numeric_ocr(text)
+
+
+def _normalize_for_ic_ocr(text: str) -> str:
+    return normalize_ic_ocr(text)
 
 
 def _fix_common_malay_ocr(text: str) -> str:
@@ -606,11 +634,16 @@ def _extract_relationship(text: str) -> str | None:
     if parenthetical is not None:
         relation = _normalize_free_text(parenthetical.group(1))
         relation = re.sub(r"^C\s*(?=BAPA|LELAKI|SAUDARA)", "", relation).strip()
-        return relation
+        return correct_relationship(relation)
 
     for value in RELATIONSHIP_VALUES:
         if value in normalized:
             return value
+
+    candidate = re.sub(r"[^A-Z ]", " ", normalized)
+    candidate = re.sub(r"\s+", " ", candidate).strip()
+    if candidate:
+        return correct_relationship(candidate)
     return None
 
 
