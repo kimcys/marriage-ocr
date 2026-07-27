@@ -48,6 +48,10 @@ ocr:
   mode: full_page
   min_average_confidence: 0.55
   save_raw_json: true
+  field_refinement:
+    enabled: true
+    max_variants_per_field: 3
+    minimum_candidate_score: 0.75
   google_vision:
     language_hints:
       - ms
