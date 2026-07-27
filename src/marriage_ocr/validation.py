@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from statistics import mean
-import re
 from typing import Any, Mapping
 
 from marriage_ocr.models import ExtractedRecord, OcrResult
-
-
-OLD_IC_PATTERN = re.compile(r"^[A-Z]\.\d{5,8}$")
-NEW_IC_PATTERN = re.compile(r"^\d{6}-\d{2}-\d{4}$")
-NAME_ALLOWED_PATTERN = re.compile(r"^[A-Z\s.'/()-]+$")
+from marriage_ocr.refinement.text_corrections import (
+    is_suspicious_name,
+    is_valid_date,
+    is_valid_malaysian_ic,
+)
 
 
 def validate_record(
@@ -84,12 +83,12 @@ def validate_record(
     if validated.mas_kahwin and validated.mas_kahwin_raw and "RM" not in validated.mas_kahwin_raw.upper():
         reasons.append("mas kahwin missing RM prefix")
 
-    if bool(validation_config.get("require_tarikh_nikah", True)) and not validated.tarikh_nikah:
+    if bool(validation_config.get("require_tarikh_nikah", True)) and not is_valid_date(validated.tarikh_nikah):
         confidence -= 0.10
         reasons.append("invalid nikah date")
         critical = True
 
-    if validated.tarikh_keluar_raw and not validated.tarikh_keluar:
+    if validated.tarikh_keluar_raw and not is_valid_date(validated.tarikh_keluar):
         confidence -= 0.10
         reasons.append("invalid keluar date")
 
@@ -149,11 +148,7 @@ def estimate_layout_confidence(
 
 
 def _has_valid_ic(old_ic: str | None, new_ic: str | None) -> bool:
-    if old_ic and OLD_IC_PATTERN.fullmatch(old_ic):
-        return True
-    if new_ic and NEW_IC_PATTERN.fullmatch(new_ic):
-        return True
-    return False
+    return is_valid_malaysian_ic(old_ic) or is_valid_malaysian_ic(new_ic)
 
 
 def _age_valid(age: int | None, validation_config: Mapping[str, Any]) -> bool:
@@ -165,7 +160,7 @@ def _age_valid(age: int | None, validation_config: Mapping[str, Any]) -> bool:
 
 
 def _is_name_suspicious(name: str) -> bool:
-    return bool(name) and (any(character.isdigit() for character in name) or not NAME_ALLOWED_PATTERN.fullmatch(name))
+    return is_suspicious_name(name)
 
 
 def _dedupe_preserve_order(values: list[str]) -> list[str]:

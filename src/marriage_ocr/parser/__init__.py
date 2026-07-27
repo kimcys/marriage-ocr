@@ -16,6 +16,11 @@ from marriage_ocr.corrections import (
 )
 from marriage_ocr.models import ExtractedRecord, OcrResult
 from marriage_ocr.ocr import RecordOcrOutput
+from marriage_ocr.refinement.text_corrections import (
+    generate_date_candidates,
+    generate_ic_candidates,
+    generate_name_candidates,
+)
 
 
 RELATIONSHIP_VALUES = [
@@ -166,15 +171,19 @@ def parse_identifiers(text: str) -> ParsedIdentifiers:
     old_ic = None
     legacy_numeric_match = None
     if old_ic_match is not None:
-        old_ic = f"{old_ic_match.group(1)}.{old_ic_match.group(2)}"
+        candidates = generate_ic_candidates(old_ic_match.group(0), field_name="ic_lama")
+        old_ic = candidates[0].value if candidates else f"{old_ic_match.group(1)}.{old_ic_match.group(2)}"
     else:
         legacy_numeric_match = LEGACY_NUMERIC_IC_PATTERN.search(normalized)
         if legacy_numeric_match is not None and NEW_IC_PATTERN.search(normalized) is None:
-            old_ic = legacy_numeric_match.group(1)
+            candidates = generate_ic_candidates(legacy_numeric_match.group(0), field_name="ic_lama")
+            old_ic = candidates[0].value if candidates else legacy_numeric_match.group(1)
 
     new_ic = None
     if new_ic_match is not None:
-        new_ic = f"{new_ic_match.group(1)}-{new_ic_match.group(2)}-{new_ic_match.group(3)}"
+        candidates = generate_ic_candidates(new_ic_match.group(0), field_name="ic_baru")
+        if candidates:
+            new_ic = candidates[0].value
 
     raw_parts = []
     if old_ic_match is not None:
@@ -196,9 +205,9 @@ def parse_date(text: str) -> ParsedDate:
     for pattern in (DATE_PATTERN, COMPACT_DATE_PATTERN):
         for match in pattern.finditer(normalized):
             raw_value = match.group(0)
-            parsed = _normalize_date_parts(match.group(1), match.group(2), match.group(3))
-            if parsed is not None:
-                return ParsedDate(normalized=parsed, raw=raw_value, needs_review=False)
+            candidates = generate_date_candidates(raw_value, field_name="date")
+            if candidates:
+                return ParsedDate(normalized=candidates[0].value, raw=raw_value, needs_review=False)
     meaningful = " ".join(_meaningful_lines(text))
     return ParsedDate(
         normalized=None,
@@ -446,7 +455,7 @@ def _extract_spouse_people(lines: Sequence[str]) -> list[dict[str, object | None
                 continue
             break
 
-        name = _normalize_name(_fix_common_malay_ocr(" ".join(name_parts)))
+        name = _normalize_name(" ".join(name_parts))
         detail = "\n".join(detail_parts)
         ids = parse_identifiers(detail)
         ages = parse_ages(detail)
@@ -666,15 +675,19 @@ def _is_probable_name_line(line: str) -> bool:
 
 
 def _looks_name_suspicious(name: str) -> bool:
-    normalized = _normalize_text(name)
-    if not normalized:
+    candidates = generate_name_candidates(name, field_name="name")
+    if not candidates:
         return True
-    return bool(NON_NAME_PATTERN.search(normalized))
+    return any(character.isdigit() for character in candidates[0].value) or bool(
+        NON_NAME_PATTERN.search(candidates[0].value)
+    )
 
 
 def _normalize_name(text: str) -> str | None:
-    normalized = _normalize_free_text(text)
-    return normalized or None
+    candidates = generate_name_candidates(text, field_name="name")
+    if not candidates:
+        return None
+    return candidates[0].value
 
 
 def _normalize_free_text(text: str) -> str:

@@ -23,3 +23,17 @@ def test_ic_parser_preserves_prefix_letters_and_repairs_digit_body() -> None:
 
     assert parsed.ic_lama == "B.1192345"
     assert parsed.ic_baru == "900101-10-1234"
+
+
+def test_ic_parser_rejects_invalid_birth_date_for_new_ic() -> None:
+    parsed = parse_identifiers("991332-10-1234")
+
+    assert parsed.ic_lama is None
+    assert parsed.ic_baru is None
+
+
+def test_ic_parser_normalizes_new_ic_separators_and_leap_day() -> None:
+    parsed = parse_identifiers("000229 10 1234")
+
+    assert parsed.ic_lama is None
+    assert parsed.ic_baru == "000229-10-1234"

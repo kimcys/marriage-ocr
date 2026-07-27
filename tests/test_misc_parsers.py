@@ -74,3 +74,33 @@ def test_record_parser_builds_structured_record() -> None:
     assert record.tarikh_nikah == "27-08-1994"
     assert record.tarikh_keluar == "02-06-1995"
     assert record.status_review == "OK"
+
+
+def test_record_parser_marks_suspicious_spouse_name_for_review_without_silent_fix() -> None:
+    cell_results = {
+        "bil": OcrResult(text="12"),
+        "suami_isteri": OcrResult(
+            text="\n".join(
+                [
+                    "AHMAD B1N ALI",
+                    "A 1192345 25 TAHUN",
+                    "SITI BINTI ALI",
+                    "900101101234 23 THN",
+                    "RM 8O.OO",
+                ]
+            )
+        ),
+        "pendaftar": OcrResult(text="MOHD SALLEH\nKAMPUNG BARU"),
+        "wali": OcrResult(text="ABDUL RAHMAN"),
+        "hubungan_wali": OcrResult(text="BAPA"),
+        "saksi": OcrResult(text="1) AHMAD BIN ALI\n2) OSMAN BIN DIN"),
+        "tarikh_nikah": OcrResult(text="27.8.94"),
+        "tarikh_keluar": OcrResult(text="2.6.95"),
+        "remarks": OcrResult(text="TIADA"),
+    }
+
+    record = parse_record_ocr(cell_results, source_record="record_013")
+
+    assert record.nama_suami == "AHMAD B1N ALI"
+    assert "nama_suami_suspicious" in record.review_reason
+    assert record.status_review == "REVIEW"

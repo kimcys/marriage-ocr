@@ -1,6 +1,11 @@
 from marriage_ocr.models import OcrResult
 from marriage_ocr.parser import parse_record_ocr
-from marriage_ocr.validation import validate_record
+from marriage_ocr.validation import (
+    is_suspicious_name,
+    is_valid_date,
+    is_valid_malaysian_ic,
+    validate_record,
+)
 
 
 VALIDATION_CONFIG = {
@@ -81,3 +86,14 @@ def test_validation_marks_empty_ocr_failed() -> None:
     assert validated.status_review == "FAILED_OCR"
     assert validated.review_reason == ["OCR returned empty text"]
     assert validated.confidence == 0.0
+
+
+def test_validation_helpers_cover_ic_date_and_name_rules() -> None:
+    assert is_valid_malaysian_ic("900101-10-1234") is True
+    assert is_valid_malaysian_ic("991332-10-1234") is False
+    assert is_valid_malaysian_ic("A.1192345") is True
+    assert is_valid_date("2024-01-01") is True
+    assert is_valid_date("27-08-1994") is True
+    assert is_valid_date("31-02-1994") is False
+    assert is_suspicious_name("SITI B1NTI ALI") is True
+    assert is_suspicious_name("SITI BINTI ALI") is False
