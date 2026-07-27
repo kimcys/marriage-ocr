@@ -32,6 +32,11 @@ class FieldRefinementSettings:
     enabled: bool = True
     max_variants_per_field: int = 3
     minimum_candidate_score: float = 0.75
+    minimum_score_improvement: float = 0.12
+    save_retry_images: bool = False
+    retry_names: bool = True
+    retry_ic_numbers: bool = True
+    retry_dates: bool = True
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> FieldRefinementSettings:
@@ -47,6 +52,13 @@ class FieldRefinementSettings:
             minimum_candidate_score=float(
                 section.get("minimum_candidate_score", cls.minimum_candidate_score)
             ),
+            minimum_score_improvement=float(
+                section.get("minimum_score_improvement", cls.minimum_score_improvement)
+            ),
+            save_retry_images=bool(section.get("save_retry_images", cls.save_retry_images)),
+            retry_names=bool(section.get("retry_names", cls.retry_names)),
+            retry_ic_numbers=bool(section.get("retry_ic_numbers", cls.retry_ic_numbers)),
+            retry_dates=bool(section.get("retry_dates", cls.retry_dates)),
         )
 
 
