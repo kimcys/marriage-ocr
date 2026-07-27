@@ -47,13 +47,23 @@ def test_decision_and_audit_row_keep_review_and_original_value() -> None:
         reason="connector typo",
     )
     audit = FieldRefinementAuditRow(
-        source_file="sample.pdf", page_number=1, record_index=1,
-        field_name=decision.field_name, original_value=decision.original_value,
-        selected_value=decision.selected_value, original_score=0.61,
-        selected_score=0.88, correction_type="connector_typo",
-        candidate_source=candidate.source, reason=decision.reason,
-        requires_review=decision.requires_review, crop_path=None, retry_count=0,
+        source_file="sample.pdf",
+        page_number=1,
+        record_index=1,
+        field_name=decision.field_name,
+        original_value=decision.original_value,
+        selected_value=decision.selected_value,
+        original_score=0.61,
+        selected_score=0.88,
+        correction_type="connector_typo",
+        candidate_source=candidate.source,
+        reason=decision.reason,
+        requires_review=decision.requires_review,
+        crop_path=None,
+        retry_count=0,
     )
 
     assert decision.selected_value == "AHMAD BIN ALI"
+    assert decision.requires_review is False
     assert audit.original_value == "AHMAD B1N ALI"
+    assert audit.requires_review is False
