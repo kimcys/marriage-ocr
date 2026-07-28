@@ -107,7 +107,7 @@ def process(
         def _print_progress(progress: ProcessProgress) -> None:
             console.print(progress.message)
 
-        process_input(
+        result = process_input(
             input_path=input,
             output_path=output,
             debug_path=debug,
@@ -118,6 +118,7 @@ def process(
             skip_existing=skip_existing,
             progress_callback=_print_progress,
         )
+        console.print(f"Refinement retry OCR calls: {result.refinement_ocr_calls}")
     except typer.BadParameter:
         raise
     except Exception as error:

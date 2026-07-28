@@ -223,3 +223,104 @@ def test_validate_record_with_optional_gemini_disables_gemini_after_leaked_key()
     assert first.status_review == "REVIEW"
     assert second.status_review == "OK"
     assert any("Gemini disabled for the remainder of this run" in str(args[0]) for args, _ in logger.messages)
+
+
+def test_validate_record_with_optional_gemini_receives_refined_record() -> None:
+    seen: list[str | None] = []
+
+    def gemini_processor(parsed_record, record_output, *, layout_confidence):
+        seen.append(parsed_record.nama_suami)
+        return ExtractedRecord(
+            **{
+                **parsed_record.to_dict(),
+                "status_review": "OK",
+                "review_reason": [],
+                "confidence": 0.97,
+            }
+        )
+
+    refined_record = ExtractedRecord(
+        bil="1",
+        nama_suami="AHMAD BIN ALI",
+        ic_baru_suami="900101-01-1234",
+        umur_suami=30,
+        nama_isteri="SITI BINTI ALI",
+        ic_baru_isteri="900101-01-5678",
+        umur_isteri=28,
+        mas_kahwin="RM100",
+        mas_kahwin_raw="RM100",
+        nama_pendaftar="ABDUL",
+        alamat_pendaftar="KUALA LUMPUR",
+        nama_wali="AHMAD",
+        hubungan_wali="BAPA",
+        saksi_1="HASHIM",
+        saksi_2="RAHMAN",
+        tarikh_nikah="2024-01-03",
+    )
+    record_output = _FakeRecordOutput(
+        record_dir=Path("."),
+        cell_results={"bil": OcrResult(text="1", average_confidence=0.95)},
+    )
+
+    validated = pipeline._validate_record_with_optional_gemini(
+        parsed_record=refined_record,
+        record_output=record_output,
+        layout_confidence=1.0,
+        gemini_processor=gemini_processor,
+        gemini_state={},
+        validation_config={"ok_confidence_threshold": 0.85, "min_average_confidence": 0.5},
+        logger=object(),
+        source_file="input.pdf",
+        source_page=1,
+    )
+
+    assert seen == ["AHMAD BIN ALI"]
+    assert validated.nama_suami == "AHMAD BIN ALI"
+
+
+def test_validate_record_with_optional_gemini_accepts_refined_record() -> None:
+    class FakeLogger:
+        def warning(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    def failing_processor(parsed_record, record_output, *, layout_confidence):
+        assert parsed_record.nama_suami == "AHMAD BIN ALI"
+        raise RuntimeError("leaked api key")
+
+    parsed_record = ExtractedRecord(
+        bil="1",
+        nama_suami="AHMAD BIN ALI",
+        ic_lama_suami="A.1234567",
+        umur_suami=30,
+        nama_isteri="SITI BINTI ALI",
+        ic_baru_isteri="900101-01-1234",
+        umur_isteri=28,
+        mas_kahwin="RM100",
+        mas_kahwin_raw="RM100",
+        nama_pendaftar="ABDUL",
+        alamat_pendaftar="KUALA LUMPUR",
+        nama_wali="AHMAD",
+        hubungan_wali="BAPA",
+        saksi_1="HASHIM",
+        saksi_2="RAHMAN",
+        tarikh_nikah="2024-01-01",
+    )
+    record_output = _FakeRecordOutput(
+        record_dir=Path("."),
+        cell_results={"bil": OcrResult(text="1", average_confidence=0.95)},
+    )
+
+    validated = pipeline._validate_record_with_optional_gemini(
+        parsed_record=parsed_record,
+        record_output=record_output,
+        layout_confidence=1.0,
+        gemini_processor=failing_processor,
+        gemini_state={},
+        validation_config={"ok_confidence_threshold": 0.85, "min_average_confidence": 0.5},
+        logger=FakeLogger(),
+        source_file="input.pdf",
+        source_page=1,
+    )
+
+    assert validated.status_review == "REVIEW"
+    assert "Gemini unavailable: RuntimeError" in validated.review_reason
