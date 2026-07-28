@@ -112,6 +112,8 @@ def _configure_process(
     llm_enabled: bool = False,
     field_refinement_enabled: bool = True,
     max_variants_per_field: int = 3,
+    output_path: Path | None = None,
+    expect_csv_export: bool = False,
 ):
     page = SimpleNamespace(
         debug_name="page_001",
@@ -153,6 +155,7 @@ def _configure_process(
 
     parsed_iter = iter(parsed_records)
     export_calls: list[list[ExtractedRecord]] = []
+    chosen_output_path = output_path or (tmp_path / "output.xlsx")
     validate_inputs: list[ExtractedRecord] = []
 
     monkeypatch.setattr(
@@ -214,11 +217,18 @@ def _configure_process(
     monkeypatch.setattr("marriage_ocr.parser.save_parsed_record", lambda *args, **kwargs: None)
     monkeypatch.setattr("marriage_ocr.postprocess.correct_bil_sequence", lambda records, **kwargs: records)
     monkeypatch.setattr("marriage_ocr.validation.estimate_layout_confidence", lambda **kwargs: 0.92)
-    monkeypatch.setattr(
-        "marriage_ocr.exporter.export_records_to_xlsx",
-        lambda records, output_path, export_cfg, **kwargs: export_calls.append(list(records))
-        or SimpleNamespace(written_count=len(records), skipped_duplicates=0, output_path=output_path),
-    )
+    def fake_export_records_to_xlsx(records, output_path, export_cfg, **kwargs):
+        if expect_csv_export:
+            raise AssertionError("csv output should not use the XLSX exporter")
+        export_calls.append(list(records))
+        return SimpleNamespace(written_count=len(records), skipped_duplicates=0, output_path=output_path)
+
+    def fake_export_records_to_csv(records, output_path, export_cfg, **kwargs):
+        export_calls.append(list(records))
+        return SimpleNamespace(written_count=len(records), skipped_duplicates=0, output_path=output_path)
+
+    monkeypatch.setattr("marriage_ocr.exporter.export_records_to_xlsx", fake_export_records_to_xlsx)
+    monkeypatch.setattr("marriage_ocr.exporter.export_records_to_csv", fake_export_records_to_csv)
     monkeypatch.setattr(pipeline, "refine_field", refine_impl, raising=False)
 
     if llm_enabled:
@@ -238,7 +248,7 @@ def _configure_process(
 
     result = pipeline.process_input(
         input_path=tmp_path / "input.pdf",
-        output_path=tmp_path / "output.xlsx",
+        output_path=chosen_output_path,
         debug_path=tmp_path / "debug",
         config_path=tmp_path / "config.yaml",
         retain_debug_artifacts=True,
@@ -271,6 +281,26 @@ def test_process_input_refines_before_validation(monkeypatch, tmp_path: Path) ->
     assert validate_inputs[0].tarikh_nikah == "2024-01-03"
     assert result.refinement_ocr_calls == 3
     assert export_calls[0][0].nama_suami == "AHMAD BIN ALI"
+
+
+def test_process_input_routes_csv_output_to_csv_exporter(monkeypatch, tmp_path: Path) -> None:
+    result, validate_inputs, export_calls = _configure_process(
+        monkeypatch,
+        tmp_path,
+        parsed_records=[_base_record(bil="1")],
+        refine_impl=lambda field_name, original_value, parsed_value=None, **kwargs: _decision(
+            field_name,
+            original_value,
+            original_value,
+            reason="accepted_without_retry",
+        ),
+        output_path=tmp_path / "output.csv",
+        expect_csv_export=True,
+    )
+
+    assert result.output_path == tmp_path / "output.csv"
+    assert validate_inputs[0].bil == "1"
+    assert export_calls[0][0].nama_suami == "AHMAD B1N ALI"
 
 
 def test_process_input_skips_retry_stage_when_refinement_disabled(monkeypatch, tmp_path: Path) -> None:

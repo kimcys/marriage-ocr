@@ -80,7 +80,7 @@ def process_input(
 
     from marriage_ocr.cropper import save_record_crops
     from marriage_ocr.document_loader import load_document_pages, write_image
-    from marriage_ocr.exporter import export_records_to_xlsx
+    from marriage_ocr.exporter import export_records_to_csv, export_records_to_xlsx
     from marriage_ocr.layout import create_record_overlay, create_table_overlay, detect_layout
     from marriage_ocr.ocr import build_ocr_engine, run_ocr_on_page_layout, run_ocr_on_record_crops
     from marriage_ocr.parser import parse_record_ocr_output, save_parsed_record
@@ -313,13 +313,22 @@ def process_input(
     status_summary = ", ".join(f"{name}={count}" for name, count in sorted(status_counts.items())) or "no validated records"
     export_summary = None
     if ocr_engine is not None and output_path is not None:
-        export_summary = export_records_to_xlsx(
-            validated_records,
-            output_path,
-            export_cfg,
-            reset_output=reset_output,
-            skip_existing=skip_existing,
-        )
+        if output_path.suffix.lower() == ".csv":
+            export_summary = export_records_to_csv(
+                validated_records,
+                output_path,
+                export_cfg,
+                reset_output=reset_output,
+                skip_existing=skip_existing,
+            )
+        else:
+            export_summary = export_records_to_xlsx(
+                validated_records,
+                output_path,
+                export_cfg,
+                reset_output=reset_output,
+                skip_existing=skip_existing,
+            )
     if retain_debug_artifacts and refinement_audit_rows:
         write_refinement_audit(refinement_audit_rows, debug_root / "refinement_audit.csv")
 
@@ -333,8 +342,9 @@ def process_input(
             completion_message += f"; refinement OCR calls {total_refinement_ocr_calls}"
         completion_message += f" [{status_summary}]"
         if export_summary is not None:
+            export_label = "CSV" if export_summary.output_path.suffix.lower() == ".csv" else "XLSX"
             completion_message += (
-                f"; XLSX wrote {export_summary.written_count} row(s) and skipped "
+                f"; {export_label} wrote {export_summary.written_count} row(s) and skipped "
                 f"{export_summary.skipped_duplicates} duplicate(s) to {export_summary.output_path}"
             )
         completion_message += (

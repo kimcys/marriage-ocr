@@ -66,10 +66,10 @@ def main() -> None:
 @app.command()
 def process(
     input: Path = typer.Option(..., "--input", "-i", help="Input image, PDF, or folder"),
-    output: Path = typer.Option(..., "--output", "-o", help="Output XLSX path"),
+    output: Path = typer.Option(..., "--output", "-o", help="Output CSV or XLSX path"),
     debug: Path = typer.Option(Path("debug"), "--debug", help="Debug output folder when artifacts are retained"),
     config: Path = typer.Option(Path("config/default.yaml"), "--config", help="Config file"),
-    reset_output: bool = typer.Option(False, "--reset-output", help="Delete old XLSX before processing"),
+    reset_output: bool = typer.Option(False, "--reset-output", help="Delete old output before processing"),
     layout_only: bool = typer.Option(False, "--layout-only", help="Only detect layout/crops"),
     skip_existing: bool = typer.Option(False, "--skip-existing", help="Skip duplicate records"),
 ) -> None:
