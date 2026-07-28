@@ -87,7 +87,99 @@ In the review UI you can:
 
 Corrections are saved into `corrected_record.json` inside each record directory.
 
-## 5. Export Training Data
+The review bundle also loads `refinement_audit.json` when it exists, so the UI can show the original value, selected value, retry source, scores, retry count, and review flag for each refined field.
+
+## 5. Handwritten Refinement
+
+The handwritten `process` command keeps the existing parsing and export behavior, then runs a conservative refinement stage before final validation. It only targets suspicious handwritten fields that are already supported by the parser:
+
+- names: `nama_suami`, `nama_isteri`, `nama_pendaftar`, `nama_wali`, `saksi_1`, `saksi_2`
+- IC values: `ic_lama_*`, `ic_baru_*`, `id_*`
+- dates: `tarikh_nikah`, `tarikh_keluar`
+
+The refinement stage uses the configured OCR engine for retry reads on deterministic crop variants. It never applies broad dictionary replacement to personal names. That omission is deliberate: aggressive dictionary autocorrection introduces too many false positives for real person names, so the shipped behavior stays narrow and reviewable.
+
+Default config lives under `ocr.field_refinement`:
+
+```yaml
+ocr:
+  field_refinement:
+    enabled: true
+    max_variants_per_field: 3
+    minimum_candidate_score: 0.75
+```
+
+The runtime also supports these optional settings:
+
+- `minimum_score_improvement`
+- `save_retry_images`
+- `retry_names`
+- `retry_ic_numbers`
+- `retry_dates`
+
+Disable the refinement pass completely with:
+
+```yaml
+ocr:
+  field_refinement:
+    enabled: false
+```
+
+When disabled, the pipeline skips the retry stage entirely and keeps the original handwritten flow unchanged.
+
+How uncertain fields are handled:
+
+- suspicious fields are retried only when the parsed value looks unsafe
+- stronger retry candidates are accepted only when they clear the configured score thresholds
+- weak retry candidates fall back to the original parsed value
+- unresolved fields stay flagged for human review instead of being silently rewritten
+
+Cost and artifact notes:
+
+- refinement can increase OCR cost because each suspicious field may trigger additional OCR reads
+- aggregate audit output is written to `debug/refinement_audit.csv` only when `debug.retain_artifacts: true`
+- per-record audit metadata is written to `debug/<page>/records/<record>/refinement_audit.json`
+
+The audit CSV schema is:
+
+- `source_file`
+- `page_number`
+- `record_index`
+- `field_name`
+- `original_value`
+- `selected_value`
+- `original_score`
+- `selected_score`
+- `correction_type`
+- `candidate_source`
+- `reason`
+- `requires_review`
+- `crop_path`
+- `retry_count`
+
+## 6. Baseline Benchmark Helper
+
+Use the lightweight benchmark helper after you have a reviewed sample:
+
+1. Run `process` with `debug.retain_artifacts: true`.
+2. Open the review UI and verify corrected records.
+3. Collect at least the first 25 verified records in normal review order.
+4. Run `build_refinement_baseline(debug_path, limit=25)`.
+
+The helper reads the existing review bundles and refinement audit sidecars. It reports:
+
+- `record_count`
+- `name_exact_match_count`
+- `ic_exact_match_count`
+- `date_exact_match_count`
+
+Known limitations:
+
+- it only measures exact matches against the reviewed active record
+- it only covers audited name, IC, and date fields
+- it is a quick regression baseline, not a full precision/recall evaluation
+
+## 7. Export Training Data
 
 ```bash
 .venv/bin/python -m marriage_ocr.cli export-training \
@@ -115,7 +207,7 @@ The label format is:
 image_path<TAB>label_text
 ```
 
-## 6. Logs And Error Reports
+## 8. Logs And Error Reports
 
 Every CLI command writes a timestamped log file under `logs/`.
 
@@ -127,7 +219,7 @@ If a command fails unexpectedly, the CLI also writes a JSON error report under `
 - current working directory
 - relevant `MARRIAGE_OCR_*` environment variables
 
-## 7. Config Files
+## 9. Config Files
 
 - `config/default.yaml`: local development defaults
 - `config/production.yaml`: packaged runtime defaults
@@ -141,7 +233,7 @@ MARRIAGE_OCR_OCR_ENGINE=google_vision
 MARRIAGE_OCR__TRAINING_EXPORT__VALIDATION_RATIO=0.10
 ```
 
-## 8. Docker
+## 10. Docker
 
 Build:
 
@@ -182,8 +274,9 @@ docker run --rm -p 8501:8501 \
     --port 8501
 ```
 
-## 9. Known Limits
+## 11. Known Limits
 
 - The default OCR path now depends on Google Vision credentials and outbound network access.
+- Handwritten refinement can increase OCR calls when suspicious fields trigger retries.
 - Training export is structurally correct, but its usefulness depends on human-corrected cell labels.
 - Streamlit review requires a machine that can bind a local port.
