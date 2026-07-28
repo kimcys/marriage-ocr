@@ -125,7 +125,7 @@ def _estimate_skew_angle(image: np.ndarray, settings: PreprocessSettings) -> flo
 
     angles: list[float] = []
     for raw_line in lines:
-        x1, y1, x2, y2 = raw_line[0]
+        x1, y1, x2, y2 = _extract_hough_line_points(raw_line)
         angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
         normalized = _normalize_line_angle(angle, settings.deskew_max_angle)
         if normalized is not None:
@@ -151,6 +151,14 @@ def _fold_angle(angle: float) -> float:
     while angle > 90.0:
         angle -= 180.0
     return angle
+
+
+def _extract_hough_line_points(raw_line: np.ndarray) -> tuple[int, int, int, int]:
+    points = np.asarray(raw_line).reshape(-1)
+    if points.size != 4:
+        raise ValueError(f"Unexpected Hough line shape: {np.asarray(raw_line).shape}")
+    x1, y1, x2, y2 = (int(value) for value in points.tolist())
+    return x1, y1, x2, y2
 
 
 def _rotate_image(image: np.ndarray, angle: float) -> np.ndarray:
