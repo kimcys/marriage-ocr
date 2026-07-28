@@ -48,10 +48,17 @@ def _base_record(*, bil: str) -> ExtractedRecord:
     )
 
 
-def _candidate(value: str, *, attempt: int | None = None) -> FieldCandidate:
+def _candidate(
+    value: str,
+    *,
+    attempt: int | None = None,
+    correction_type: str | None = None,
+) -> FieldCandidate:
     metadata: dict[str, object] = {}
     if attempt is not None:
         metadata["retry_attempt"] = attempt
+    if correction_type is not None:
+        metadata["correction_type"] = correction_type
     return FieldCandidate(
         value=value,
         source="retry_thresholded" if attempt is not None else "original_ocr",
@@ -72,10 +79,17 @@ def _decision(
     attempts: int = 0,
     requires_review: bool = False,
     reason: str = "accepted_after_retry",
+    correction_type: str | None = None,
 ) -> FieldRefinementDecision:
     candidates = [_candidate(original_value or "", attempt=None)]
     for attempt in range(1, attempts + 1):
-        candidates.append(_candidate(selected_value or original_value or "", attempt=attempt))
+        candidates.append(
+            _candidate(
+                selected_value or original_value or "",
+                attempt=attempt,
+                correction_type=correction_type,
+            )
+        )
     selected_candidate = candidates[-1] if candidates else None
     return FieldRefinementDecision(
         field_name=field_name,
@@ -364,7 +378,13 @@ def test_process_input_passes_refined_record_into_gemini_path(monkeypatch, tmp_p
 def test_process_input_writes_refinement_audit_artifacts_when_debug_retained(monkeypatch, tmp_path: Path) -> None:
     def fake_refine_field(field_name, original_value, parsed_value=None, **kwargs):
         if field_name == "nama_suami":
-            return _decision(field_name, original_value, "AHMAD BIN ALI", attempts=1)
+            return _decision(
+                field_name,
+                original_value,
+                "AHMAD BIN ALI",
+                attempts=1,
+                correction_type="connector_typo",
+            )
         return _decision(field_name, original_value, original_value, reason="accepted_without_retry")
 
     result, _, _ = _configure_process(
@@ -385,7 +405,28 @@ def test_process_input_writes_refinement_audit_artifacts_when_debug_retained(mon
     assert sidecar_path.exists()
     assert rows[0]["field_name"] == "nama_suami"
     assert rows[0]["selected_value"] == "AHMAD BIN ALI"
+    assert rows[0]["correction_type"] == "connector_typo"
+    assert rows[0]["candidate_source"] == "retry_thresholded"
     assert rows[0]["requires_review"] == "false"
+
+
+def test_process_input_omits_audit_artifacts_when_refinement_disabled(monkeypatch, tmp_path: Path) -> None:
+    result, _, _ = _configure_process(
+        monkeypatch,
+        tmp_path,
+        parsed_records=[_base_record(bil="1")],
+        refine_impl=lambda *args, **kwargs: _decision(
+            kwargs.get("field_name", ""),
+            kwargs.get("original_value"),
+            kwargs.get("original_value"),
+            reason="disabled",
+        ),
+        field_refinement_enabled=False,
+    )
+
+    assert result.refinement_audit_rows == []
+    assert not (tmp_path / "debug" / "refinement_audit.csv").exists()
+    assert not (tmp_path / "record_001" / "refinement_audit.json").exists()
 
 
 def test_process_command_prints_refinement_summary(monkeypatch, tmp_path: Path) -> None:

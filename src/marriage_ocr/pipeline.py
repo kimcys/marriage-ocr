@@ -231,7 +231,8 @@ def process_input(
                     refinement_audit_rows.extend(record_refinement_rows)
                 if retain_debug_artifacts:
                     save_parsed_record(refined_record, record_output.record_dir / "parsed_record.json")
-                    save_refinement_audit_sidecar(record_output.record_dir, record_refinement_rows)
+                    if record_refinement_rows:
+                        save_refinement_audit_sidecar(record_output.record_dir, record_refinement_rows)
                 layout_confidence = estimate_layout_confidence(
                     marker_present=record_layout.marker_box is not None,
                     cell_count=len(record_layout.cells),
@@ -552,7 +553,11 @@ def _build_refinement_audit_row(
         selected_value=decision.selected_value,
         original_score=original_score,
         selected_score=selected_score,
-        correction_type=(selected_candidate.source if selected_candidate is not None else "original_ocr"),
+        correction_type=(
+            str(selected_candidate.metadata.get("correction_type", selected_candidate.source))
+            if selected_candidate is not None
+            else "original_ocr"
+        ),
         candidate_source=(selected_candidate.source if selected_candidate is not None else "original_ocr"),
         reason=decision.reason,
         requires_review=decision.requires_review,
