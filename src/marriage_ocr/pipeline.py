@@ -9,6 +9,7 @@ from marriage_ocr.config import load_runtime_config
 from marriage_ocr.logging_config import get_logger
 from marriage_ocr.models import ExtractedRecord
 from marriage_ocr.refinement import field_refinement as refinement_engine
+from marriage_ocr.refinement.audit import save_refinement_audit_sidecar, write_refinement_audit
 from marriage_ocr.refinement.field_refinement import refine_field
 from marriage_ocr.refinement.models import (
     FieldCandidate,
@@ -215,6 +216,7 @@ def process_input(
                     include_crop_folder=retain_debug_artifacts,
                 )
                 refined_record = parsed_record
+                record_refinement_rows: list[FieldRefinementAuditRow] = []
                 if ocr_engine is not None and refinement_settings.enabled:
                     refined_record, record_refinement_rows, refinement_calls = refine_record_fields(
                         parsed_record=parsed_record,
@@ -229,6 +231,7 @@ def process_input(
                     refinement_audit_rows.extend(record_refinement_rows)
                 if retain_debug_artifacts:
                     save_parsed_record(refined_record, record_output.record_dir / "parsed_record.json")
+                    save_refinement_audit_sidecar(record_output.record_dir, record_refinement_rows)
                 layout_confidence = estimate_layout_confidence(
                     marker_present=record_layout.marker_box is not None,
                     cell_count=len(record_layout.cells),
@@ -316,6 +319,8 @@ def process_input(
             reset_output=reset_output,
             skip_existing=skip_existing,
         )
+    if retain_debug_artifacts and refinement_audit_rows:
+        write_refinement_audit(refinement_audit_rows, debug_root / "refinement_audit.csv")
 
     if ocr_engine is not None:
         completion_message = "[bold green]Marriage OCR process complete[/bold green] "

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import csv
 from types import SimpleNamespace
 
 import numpy as np
@@ -358,6 +359,33 @@ def test_process_input_passes_refined_record_into_gemini_path(monkeypatch, tmp_p
 
     assert seen == ["AHMAD BIN ALI"]
     assert result.records[0].nama_suami == "AHMAD BIN ALI"
+
+
+def test_process_input_writes_refinement_audit_artifacts_when_debug_retained(monkeypatch, tmp_path: Path) -> None:
+    def fake_refine_field(field_name, original_value, parsed_value=None, **kwargs):
+        if field_name == "nama_suami":
+            return _decision(field_name, original_value, "AHMAD BIN ALI", attempts=1)
+        return _decision(field_name, original_value, original_value, reason="accepted_without_retry")
+
+    result, _, _ = _configure_process(
+        monkeypatch,
+        tmp_path,
+        parsed_records=[_base_record(bil="1")],
+        refine_impl=fake_refine_field,
+    )
+
+    audit_csv_path = tmp_path / "debug" / "refinement_audit.csv"
+    sidecar_path = tmp_path / "record_001" / "refinement_audit.json"
+
+    with audit_csv_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert result.refinement_audit_rows
+    assert audit_csv_path.exists()
+    assert sidecar_path.exists()
+    assert rows[0]["field_name"] == "nama_suami"
+    assert rows[0]["selected_value"] == "AHMAD BIN ALI"
+    assert rows[0]["requires_review"] == "false"
 
 
 def test_process_command_prints_refinement_summary(monkeypatch, tmp_path: Path) -> None:

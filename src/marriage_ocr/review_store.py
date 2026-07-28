@@ -9,6 +9,8 @@ from typing import Any, Iterable
 
 from marriage_ocr.exporter import ExportSummary, export_records_to_xlsx
 from marriage_ocr.models import ExtractedRecord
+from marriage_ocr.refinement.audit import load_refinement_audit_sidecar
+from marriage_ocr.refinement.models import FieldRefinementAuditRow
 
 
 ALLOWED_REVIEW_STATUSES = [
@@ -36,6 +38,7 @@ class ReviewBundle:
     reviewed_at: str | None
     reviewed_by: str | None
     review_notes: str | None
+    refinement_audit_rows: list[FieldRefinementAuditRow]
 
     @property
     def page_dir(self) -> Path:
@@ -96,6 +99,7 @@ def load_review_bundle(record_dir: str | Path) -> ReviewBundle:
         reviewed_at=corrected_payload.reviewed_at if corrected_payload is not None else None,
         reviewed_by=corrected_payload.reviewed_by if corrected_payload is not None else None,
         review_notes=corrected_payload.review_notes if corrected_payload is not None else None,
+        refinement_audit_rows=load_refinement_audit_sidecar(resolved_dir),
     )
 
 
