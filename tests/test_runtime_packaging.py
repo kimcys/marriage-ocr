@@ -47,6 +47,45 @@ def test_load_runtime_config_applies_env_file_overrides(tmp_path: Path) -> None:
     assert loaded.data["logging"]["directory"] == "runtime-logs"
 
 
+def test_handwritten_config_uses_cell_crops_and_public_export() -> None:
+    loaded = load_runtime_config(Path("config/handwritten.yaml"))
+
+    assert loaded.data["ocr"]["mode"] == "cell_crops"
+    assert loaded.data["ocr"]["field_refinement"]["enabled"] is True
+    assert loaded.data["llm"]["enabled"] is True
+    assert loaded.data["llm"]["provider"] == "gemini"
+    assert loaded.data["ocr"]["field_refinement"]["max_variants_per_field"] == 4
+    assert loaded.data["ocr"]["field_refinement"]["minimum_candidate_score"] == 0.65
+    assert loaded.data["ocr"]["field_refinement"]["minimum_score_improvement"] == 0.05
+    assert loaded.data["llm"]["prompt_mode"] == "handwritten_aggressive"
+    assert loaded.data["llm"]["prefer_gemini_threshold"] == 0.55
+    assert loaded.data["llm"]["review_below_field_confidence"] == 0.65
+    assert loaded.data["export"]["include_raw_columns"] is False
+    assert loaded.data["export"]["columns"] == [
+        "Bil",
+        "Nama Suami",
+        "IC Lama Suami",
+        "IC Baru Suami",
+        "Umur Suami",
+        "Nama Isteri",
+        "IC Lama Isteri",
+        "IC Baru Isteri",
+        "Umur Isteri",
+        "Mas Kahwin",
+        "Nama Pendaftar",
+        "Alamat Pendaftar",
+        "Nama Wali",
+        "Hubungan Wali",
+        "Saksi 1",
+        "Saksi 2",
+        "Tarikh Nikah",
+        "Tarikh Keluar",
+        "Remarks",
+        "Confidence",
+        "Status",
+    ]
+
+
 def test_error_report_uses_logging_runtime_paths(tmp_path: Path) -> None:
     runtime = setup_logging(
         "process",

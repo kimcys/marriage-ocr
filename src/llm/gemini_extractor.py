@@ -110,7 +110,36 @@ class GeminiRecordExtractor:
             }
             for name, result in ocr_cells.items()
         }
-        return f"""
+
+        prompt_mode = str(self.config.get("prompt_mode", "")).strip().lower()
+        if prompt_mode == "handwritten_aggressive":
+            instructions = """
+You are extracting ONE handwritten row from a Malay Islamic marriage register,
+Daftar Perkahwinan Orang Islam.
+
+Use the image as the primary source. Use the Google Vision OCR cell hints only as
+secondary evidence. If the OCR hint conflicts with the image, prefer the image.
+
+Return only JSON matching the schema. Do not include markdown.
+
+Rules:
+- Correct OCR errors aggressively across all fields when the image supports the correction.
+- Prioritize semantic correctness over literal transcription for every column.
+- Normalize obvious OCR artifacts, broken spacing, and punctuation noise.
+- Do not preserve misspellings that are clearly OCR mistakes.
+- Preserve names as written only when the image truly supports the original spelling.
+- Common corrections: 4J/ITJ/14J -> HJ.; BIR/8IN -> BIN; BINT!/BINT1 -> BINTI; BAP9/B4PA -> BAPA.
+- Dates: put the original visible text in *_raw; normalize to YYYY-MM-DD only if clear.
+- IC values: split old/new IC only when obvious; otherwise keep uncertain text in id_*_raw.
+- mas_kahwin should usually contain RM and a numeric amount when visible.
+- hubungan_wali should be a relationship such as BAPA, ABANG, ADIK-BERADIK, WALI HAKIM, etc.
+- saksi_1 and saksi_2 are the two marriage witnesses when visible.
+- Use the strongest plausible spelling for addresses, remarks, and other free-text columns instead of leaving OCR noise unchanged.
+        - Return field_confidence as an array of objects with `field` and `confidence`.
+        - Put fields below 0.70 confidence into uncertain_fields.
+""".strip()
+        else:
+            instructions = """
 You are extracting ONE handwritten row from a Malay Islamic marriage register,
 Daftar Perkahwinan Orang Islam.
 
@@ -130,6 +159,9 @@ Rules:
 - saksi_1 and saksi_2 are the two marriage witnesses when visible.
         - Return field_confidence as an array of objects with `field` and `confidence`.
         - Put fields below 0.70 confidence into uncertain_fields.
+""".strip()
+        return f"""
+{instructions}
 
 Google Vision OCR cell hints:
 {json.dumps(cell_hints, ensure_ascii=False, indent=2)}

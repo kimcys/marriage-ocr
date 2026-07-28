@@ -75,6 +75,19 @@ Run the pipeline with the packaged production settings:
   --reset-output
 ```
 
+For handwritten records, use the dedicated handwritten profile:
+
+```bash
+.venv/bin/python -m marriage_ocr.cli process \
+  --input input/handwritten \
+  --output output/handwritten_records.csv \
+  --debug debug/handwritten \
+  --config config/handwritten.yaml \
+  --reset-output
+```
+
+That profile uses `ocr.mode: cell_crops`, keeps Gemini enabled for the second-pass cleanup, enables the handwritten aggressive prompt mode, and is tuned aggressively for noisy handwriting rather than the typed Borang 4B flow.
+
 Run the DB batch flow with Gemini enabled in `config/production.yaml`:
 
 ```bash

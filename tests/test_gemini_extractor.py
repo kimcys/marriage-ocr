@@ -92,6 +92,19 @@ def test_extract_record_uses_single_client(tmp_path: Path) -> None:
     assert models.calls[0]["model"] == "gemini-2.5-flash"
 
 
+def test_build_prompt_uses_aggressive_handwritten_mode() -> None:
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+    extractor.config = {"prompt_mode": "handwritten_aggressive"}
+
+    prompt = GeminiRecordExtractor._build_prompt(
+        extractor,
+        {"bil": OcrResult(text="7", average_confidence=0.95)},
+    )
+
+    assert "Correct OCR errors aggressively across all fields" in prompt
+    assert "Prioritize semantic correctness over literal transcription" in prompt
+
+
 def test_extract_record_prefers_sdk_parsed_payload(tmp_path: Path) -> None:
     class FakePart:
         @staticmethod

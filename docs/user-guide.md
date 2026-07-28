@@ -40,6 +40,19 @@ What you get:
 - no retained page crops or JSON artifacts by default
 - log file under `logs/`
 
+For handwritten pages, use the dedicated handwritten config instead:
+
+```bash
+.venv/bin/python -m marriage_ocr.cli process \
+  --input input/handwritten \
+  --output output/handwritten_records.csv \
+  --debug debug/handwritten \
+  --config config/handwritten.yaml \
+  --reset-output
+```
+
+That profile uses cell-crop OCR, higher DPI, stronger preprocessing, the handwritten refinement defaults, Gemini for a second-pass cleanup, and the handwritten aggressive prompt mode. It is tuned aggressively for handwritten fields across the whole row. If you do not have a Gemini key available, switch `llm.enabled` off in a copy of the config.
+
 ## 3. Batch Into Postgres With Gemini
 
 This is the path that runs Google Vision OCR, the existing parser, and the Gemini merge step before writing records into Postgres.
