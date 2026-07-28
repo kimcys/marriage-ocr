@@ -6,9 +6,49 @@ OCR-assisted pipeline for extracting handwritten `Daftar Perkahwinan Orang Islam
 
 - Processes images and PDFs into per-record debug crops.
 - Runs OCR and rule-based parsing.
+- Runs a conservative handwritten field-refinement pass for names, ICs, and dates before final validation.
 - Validates extracted records and exports XLSX.
 - Provides a Streamlit review UI for human correction.
 - Exports corrected cell crops and label files for OCR fine-tuning.
+
+## Handwritten Refinement
+
+The handwritten pipeline keeps the existing OCR and export flow intact, then applies a lightweight refinement pass only to suspicious handwritten names, IC values, and dates before final validation. It uses the same OCR engine that the page already ran with and records every evaluated field in refinement audit metadata.
+
+Supported fields:
+
+- Names: `nama_suami`, `nama_isteri`, `nama_pendaftar`, `nama_wali`, `saksi_1`, `saksi_2`
+- IC values: `ic_lama_*`, `ic_baru_*`, `id_*`
+- Dates: `tarikh_nikah`, `tarikh_keluar`
+
+The feature is enabled by default through `ocr.field_refinement.enabled: true`. Disable it with:
+
+```yaml
+ocr:
+  field_refinement:
+    enabled: false
+```
+
+Available settings:
+
+- `enabled`
+- `max_variants_per_field`
+- `minimum_candidate_score`
+- `minimum_score_improvement`
+- `save_retry_images`
+- `retry_names`
+- `retry_ic_numbers`
+- `retry_dates`
+
+Operational notes:
+
+- The refinement pass may trigger extra OCR calls for suspicious fields, so enabling it can increase OCR cost and runtime.
+- Uncertain results remain conservative: low-confidence retry candidates fall back to the original parsed value and are marked for review instead of being forced into the export.
+- General name-dictionary autocorrection is intentionally avoided. The pipeline only applies narrow substitutions and retry OCR because broad dictionary replacement creates false positives for Malay and Arabic-derived personal names.
+- When `debug.retain_artifacts: true` is enabled, the pipeline writes aggregate audit data to `debug/refinement_audit.csv` and per-record sidecars to `debug/<page>/records/<record>/refinement_audit.json`.
+- The audit CSV columns are `source_file`, `page_number`, `record_index`, `field_name`, `original_value`, `selected_value`, `original_score`, `selected_score`, `correction_type`, `candidate_source`, `reason`, `requires_review`, `crop_path`, `retry_count`.
+- To collect the first 25 reviewed records for a quick baseline benchmark, process with retained debug artifacts enabled, review records in the Streamlit UI, mark them verified, then run `build_refinement_baseline(debug_path, limit=25)` against that debug root.
+- Known limitation: the baseline helper measures exact matches only for audited name, IC, and date fields that already have review bundles and refinement sidecars; it does not score free-form remarks or non-refined fields.
 
 ## Quickstart
 

@@ -1,10 +1,13 @@
 from pathlib import Path
+import csv
 
 from openpyxl import load_workbook
 
 from marriage_ocr.exporter import (
+    PUBLIC_CSV_COLUMNS,
     PUBLIC_XLSX_COLUMNS,
     XLSX_COLUMNS,
+    export_records_to_csv,
     export_records_to_xlsx,
     record_from_export_dict,
     record_to_export_dict,
@@ -34,6 +37,27 @@ def test_exporter_writes_schema_and_row(tmp_path: Path) -> None:
     assert [worksheet.cell(row=1, column=index + 1).value for index in range(len(XLSX_COLUMNS))] == XLSX_COLUMNS
     assert worksheet["A2"].value == "1"
     assert worksheet["B2"].value == "MOHAMAD BIN YASMIN"
+
+
+def test_exporter_writes_csv_schema_and_row(tmp_path: Path) -> None:
+    output_path = tmp_path / "records.csv"
+    record = _make_record(source_record="record_001")
+
+    summary = export_records_to_csv([record], output_path, EXPORT_CONFIG, reset_output=True)
+
+    with output_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+
+    assert summary.written_count == 1
+    assert summary.skipped_duplicates == 0
+    assert reader.fieldnames == PUBLIC_CSV_COLUMNS
+    assert rows[0]["Bil"] == "1"
+    assert rows[0]["Nama Suami"] == "MOHAMAD BIN YASMIN"
+    assert "Source Record" not in rows[0]
+    assert "Source File" not in rows[0]
+    assert "Created At" not in rows[0]
+    assert "Updated At" not in rows[0]
 
 
 def test_exporter_can_show_public_columns_only(tmp_path: Path) -> None:

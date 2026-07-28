@@ -169,6 +169,13 @@ def build_ocr_engine(config: Mapping[str, Any]) -> OcrEngine:
     raise ValueError(f"Unsupported OCR engine: {engine_name}")
 
 
+def read_ocr_images(
+    engine: OcrEngine,
+    image_paths: Sequence[str | Path],
+) -> list[tuple[Path, OcrResult]]:
+    return [(Path(image_path), engine.read_image(image_path)) for image_path in image_paths]
+
+
 def run_ocr_on_record_crops(
     records: Sequence[RecordCropPaths],
     engine: OcrEngine,

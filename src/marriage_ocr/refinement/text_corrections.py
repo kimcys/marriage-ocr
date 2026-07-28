@@ -45,6 +45,7 @@ def generate_name_candidates(raw: str | None, *, field_name: str) -> list[FieldC
         value=prepared,
         field_name=field_name,
         source="safe_normalisation",
+        correction_type="safe_normalisation",
         substitutions=0,
         original_value=original_value,
         requires_retry_ocr=False,
@@ -68,6 +69,7 @@ def generate_name_candidates(raw: str | None, *, field_name: str) -> list[FieldC
             value=corrected_value,
             field_name=field_name,
             source="typo_rule",
+            correction_type="connector_typo",
             substitutions=substitutions,
             original_value=original_value,
             requires_retry_ocr=True,
@@ -117,6 +119,7 @@ def generate_date_candidates(raw: str | None, *, field_name: str) -> list[FieldC
             value=normalized,
             field_name=field_name,
             source="typo_rule" if substitution_count else "safe_normalisation",
+            correction_type="date_digit_confusion" if substitution_count else "date_normalisation",
             substitutions=substitution_count,
             original_value=original_value,
             requires_retry_ocr=substitution_count > 0,
@@ -185,6 +188,7 @@ def _append_candidate(
     value: str,
     field_name: str,
     source: str,
+    correction_type: str | None = None,
     substitutions: int,
     original_value: str | None,
     requires_retry_ocr: bool,
@@ -207,6 +211,7 @@ def _append_candidate(
                 "original_value": original_value,
                 "requires_retry_ocr": requires_retry_ocr,
                 "requires_review": requires_review,
+                "correction_type": correction_type or source,
             },
         )
     )
@@ -258,17 +263,18 @@ def _generate_modern_ic_candidate(
     return FieldCandidate(
         value=f"{normalized_digits[:6]}-{normalized_digits[6:8]}-{normalized_digits[8:]}",
         source="typo_rule" if substitutions else "safe_normalisation",
-        validity_score=max(0.0, 1.0 - substitutions * 0.05),
-        ocr_confidence=None,
-        plausibility_score=max(0.0, 0.99 - substitutions * 0.03),
-        similarity_score=max(0.0, 0.99 - substitutions * 0.05),
-        substitutions=substitutions,
         metadata={
             "field_name": field_name,
             "original_value": original_value,
             "requires_retry_ocr": False,
             "requires_review": False,
+            "correction_type": "digit_confusion" if substitutions else "safe_normalisation",
         },
+        validity_score=max(0.0, 1.0 - substitutions * 0.05),
+        ocr_confidence=None,
+        plausibility_score=max(0.0, 0.99 - substitutions * 0.03),
+        similarity_score=max(0.0, 0.99 - substitutions * 0.05),
+        substitutions=substitutions,
     )
 
 
@@ -302,17 +308,18 @@ def _generate_legacy_ic_candidate(
     return FieldCandidate(
         value=formatted,
         source="typo_rule" if substitutions else "safe_normalisation",
-        validity_score=max(0.0, 0.98 - substitutions * 0.05),
-        ocr_confidence=None,
-        plausibility_score=max(0.0, 0.97 - substitutions * 0.03),
-        similarity_score=max(0.0, 0.99 - substitutions * 0.05),
-        substitutions=substitutions,
         metadata={
             "field_name": field_name,
             "original_value": original_value,
             "requires_retry_ocr": False,
             "requires_review": False,
+            "correction_type": "digit_confusion" if substitutions else "safe_normalisation",
         },
+        validity_score=max(0.0, 0.98 - substitutions * 0.05),
+        ocr_confidence=None,
+        plausibility_score=max(0.0, 0.97 - substitutions * 0.03),
+        similarity_score=max(0.0, 0.99 - substitutions * 0.05),
+        substitutions=substitutions,
     )
 
 

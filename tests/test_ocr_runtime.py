@@ -10,6 +10,7 @@ from marriage_ocr.ocr import (
     _normalize_paddle_output,
     _run_paddle_inference,
     RecordCropPaths,
+    read_ocr_images,
 )
 from marriage_ocr.layout import Box
 from marriage_ocr.models import OcrLine, OcrResult
@@ -212,3 +213,25 @@ def test_run_ocr_on_page_layout_uses_crop_fallback_for_weak_assignment(tmp_path:
 
     assert engine.calls == ["page.jpg", "bil.jpg"]
     assert outputs[0].cell_results["bil"].text == "12/94"
+
+
+def test_read_ocr_images_supports_fake_engine(tmp_path: Path) -> None:
+    paths = [tmp_path / "first.png", tmp_path / "second.png"]
+    for path in paths:
+        path.write_text(path.stem, encoding="utf-8")
+
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def read_image(self, image_path: str | Path) -> OcrResult:
+            path = Path(image_path)
+            self.calls.append(path.name)
+            return OcrResult(text=path.stem.upper(), lines=[], average_confidence=0.5)
+
+    engine = FakeEngine()
+    results = read_ocr_images(engine, paths)
+
+    assert engine.calls == ["first.png", "second.png"]
+    assert [path.name for path, _ in results] == ["first.png", "second.png"]
+    assert [result.text for _, result in results] == ["FIRST", "SECOND"]

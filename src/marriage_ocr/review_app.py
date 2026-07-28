@@ -99,6 +99,7 @@ def main() -> None:
     _render_record_summary(selected_bundle)
     _render_images(selected_bundle)
     _render_raw_ocr(selected_bundle)
+    _render_refinement_audit(selected_bundle)
     _render_edit_form(selected_bundle, default_reviewer=default_reviewer)
 
 
@@ -274,6 +275,33 @@ def _render_raw_ocr(bundle: ReviewBundle) -> None:
             st.markdown(f"**{cell_name}**")
             st.caption(f"Average confidence: {float(cell_payload.get('average_confidence', 0.0)):.3f}")
             st.code(cell_payload.get("text", ""), language="text")
+
+
+def _render_refinement_audit(bundle: ReviewBundle) -> None:
+    with st.expander("Refinement Audit", expanded=False):
+        if not bundle.refinement_audit_rows:
+            st.info("No refinement audit metadata available.")
+            return
+
+        for row in bundle.refinement_audit_rows:
+            st.markdown(f"**{row.field_name}**")
+            left_column, right_column = st.columns(2)
+            with left_column:
+                st.caption("Original")
+                st.code(row.original_value or "", language="text")
+            with right_column:
+                st.caption("Selected")
+                st.code(row.selected_value or "", language="text")
+            st.caption(
+                "Source: "
+                f"{row.candidate_source} | "
+                f"Original score: {row.original_score:.2f} | "
+                f"Selected score: {row.selected_score:.2f} | "
+                f"Retry count: {row.retry_count} | "
+                f"Requires review: {'Yes' if row.requires_review else 'No'}"
+            )
+            if row.reason:
+                st.caption(f"Reason: {row.reason}")
 
 
 def _render_edit_form(bundle: ReviewBundle, *, default_reviewer: str) -> None:

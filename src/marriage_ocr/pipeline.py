@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import tempfile
 from typing import Any, Callable, Mapping
@@ -8,6 +8,15 @@ from typing import Any, Callable, Mapping
 from marriage_ocr.config import load_runtime_config
 from marriage_ocr.logging_config import get_logger
 from marriage_ocr.models import ExtractedRecord
+from marriage_ocr.refinement import field_refinement as refinement_engine
+from marriage_ocr.refinement.audit import save_refinement_audit_sidecar, write_refinement_audit
+from marriage_ocr.refinement.field_refinement import refine_field
+from marriage_ocr.refinement.models import (
+    FieldCandidate,
+    FieldRefinementAuditRow,
+    FieldRefinementDecision,
+    FieldRefinementSettings,
+)
 from marriage_ocr.validation import validate_record
 from llm import GeminiRecordExtractor, merge_parser_and_gemini
 
@@ -32,9 +41,27 @@ class ProcessResult:
     status_counts: dict[str, int]
     output_path: Path | None
     debug_path: Path
+    refinement_ocr_calls: int = 0
+    refinement_audit_rows: list[FieldRefinementAuditRow] = field(default_factory=list)
 
 
 ProgressCallback = Callable[[ProcessProgress], None]
+
+
+REFINEMENT_FIELD_CROPS: dict[str, str] = {
+    "nama_suami": "suami_isteri",
+    "ic_lama_suami": "suami_isteri",
+    "ic_baru_suami": "suami_isteri",
+    "nama_isteri": "suami_isteri",
+    "ic_lama_isteri": "suami_isteri",
+    "ic_baru_isteri": "suami_isteri",
+    "nama_pendaftar": "pendaftar",
+    "nama_wali": "wali",
+    "saksi_1": "saksi",
+    "saksi_2": "saksi",
+    "tarikh_nikah": "tarikh_nikah",
+    "tarikh_keluar": "tarikh_keluar",
+}
 
 
 def process_input(
@@ -53,7 +80,7 @@ def process_input(
 
     from marriage_ocr.cropper import save_record_crops
     from marriage_ocr.document_loader import load_document_pages, write_image
-    from marriage_ocr.exporter import export_records_to_xlsx
+    from marriage_ocr.exporter import export_records_to_csv, export_records_to_xlsx
     from marriage_ocr.layout import create_record_overlay, create_table_overlay, detect_layout
     from marriage_ocr.ocr import build_ocr_engine, run_ocr_on_page_layout, run_ocr_on_record_crops
     from marriage_ocr.parser import parse_record_ocr_output, save_parsed_record
@@ -85,6 +112,7 @@ def process_input(
     layout_cfg = cfg.get("layout", {})
     validation_cfg = cfg.get("validation", {})
     llm_cfg = dict(cfg.get("llm", {}))
+    refinement_settings = FieldRefinementSettings.from_config(cfg)
     validation_input = {
         **validation_cfg,
         "min_average_confidence": ocr_cfg.get("min_average_confidence", 0.50),
@@ -132,8 +160,10 @@ def process_input(
 
     total_records = 0
     total_ocr_cells = 0
+    total_refinement_ocr_calls = 0
     total_parsed_records = 0
     status_counts: dict[str, int] = {}
+    refinement_audit_rows: list[FieldRefinementAuditRow] = []
     validated_records: list[ExtractedRecord] = []
     ocr_engine = None if layout_only else build_ocr_engine(ocr_cfg)
 
@@ -175,13 +205,34 @@ def process_input(
                 )
                 total_ocr_cells += page_ocr_cells
 
-            for record_output, record_layout in zip(record_ocr_outputs, layout.records, strict=True):
+            for record_output, record_layout, saved_record in zip(
+                record_ocr_outputs,
+                layout.records,
+                saved_records,
+                strict=True,
+            ):
                 parsed_record = parse_record_ocr_output(
                     record_output,
                     include_crop_folder=retain_debug_artifacts,
                 )
+                refined_record = parsed_record
+                record_refinement_rows: list[FieldRefinementAuditRow] = []
+                if ocr_engine is not None and refinement_settings.enabled:
+                    refined_record, record_refinement_rows, refinement_calls = refine_record_fields(
+                        parsed_record=parsed_record,
+                        record_output=record_output,
+                        record_crops=saved_record,
+                        ocr_engine=ocr_engine,
+                        settings=refinement_settings,
+                        source_file=str(page.relative_source),
+                        source_page=page.source_page,
+                    )
+                    total_refinement_ocr_calls += refinement_calls
+                    refinement_audit_rows.extend(record_refinement_rows)
                 if retain_debug_artifacts:
-                    save_parsed_record(parsed_record, record_output.record_dir / "parsed_record.json")
+                    save_parsed_record(refined_record, record_output.record_dir / "parsed_record.json")
+                    if record_refinement_rows:
+                        save_refinement_audit_sidecar(record_output.record_dir, record_refinement_rows)
                 layout_confidence = estimate_layout_confidence(
                     marker_present=record_layout.marker_box is not None,
                     cell_count=len(record_layout.cells),
@@ -190,7 +241,7 @@ def process_input(
                     max_record_height=int(layout_cfg.get("max_record_height_px", 280)),
                 )
                 validated_record = _validate_record_with_optional_gemini(
-                    parsed_record=parsed_record,
+                    parsed_record=refined_record,
                     record_output=record_output,
                     layout_confidence=layout_confidence,
                     gemini_processor=gemini_processor,
@@ -262,32 +313,50 @@ def process_input(
     status_summary = ", ".join(f"{name}={count}" for name, count in sorted(status_counts.items())) or "no validated records"
     export_summary = None
     if ocr_engine is not None and output_path is not None:
-        export_summary = export_records_to_xlsx(
-            validated_records,
-            output_path,
-            export_cfg,
-            reset_output=reset_output,
-            skip_existing=skip_existing,
-        )
+        if output_path.suffix.lower() == ".csv":
+            export_summary = export_records_to_csv(
+                validated_records,
+                output_path,
+                export_cfg,
+                reset_output=reset_output,
+                skip_existing=skip_existing,
+            )
+        else:
+            export_summary = export_records_to_xlsx(
+                validated_records,
+                output_path,
+                export_cfg,
+                reset_output=reset_output,
+                skip_existing=skip_existing,
+            )
+    if retain_debug_artifacts and refinement_audit_rows:
+        write_refinement_audit(refinement_audit_rows, debug_root / "refinement_audit.csv")
 
-    completion_message = "[bold green]Marriage OCR process complete[/bold green] " + (
-        f"generated preprocessing, layout, OCR results for {total_ocr_cells} cell crop(s), "
-        f"and parsed/validated {total_parsed_records} record(s) across {total_records} record(s) on {len(pages)} page(s)"
-        f" [{status_summary}]"
-        + (
-            f"; XLSX wrote {export_summary.written_count} row(s) and skipped "
-            f"{export_summary.skipped_duplicates} duplicate(s) to {export_summary.output_path}"
-            if export_summary is not None
-            else ""
+    if ocr_engine is not None:
+        completion_message = "[bold green]Marriage OCR process complete[/bold green] "
+        completion_message += (
+            f"generated preprocessing, layout, OCR results for {total_ocr_cells} cell crop(s), "
+            f"and parsed/validated {total_parsed_records} record(s) across {total_records} record(s) on {len(pages)} page(s)"
         )
-        + (
+        if total_refinement_ocr_calls:
+            completion_message += f"; refinement OCR calls {total_refinement_ocr_calls}"
+        completion_message += f" [{status_summary}]"
+        if export_summary is not None:
+            export_label = "CSV" if export_summary.output_path.suffix.lower() == ".csv" else "XLSX"
+            completion_message += (
+                f"; {export_label} wrote {export_summary.written_count} row(s) and skipped "
+                f"{export_summary.skipped_duplicates} duplicate(s) to {export_summary.output_path}"
+            )
+        completion_message += (
             f"; retained debug artifacts at {debug_root}"
             if retain_debug_artifacts
             else "; debug artifacts were not retained"
         )
-        if ocr_engine is not None
-        else f"generated preprocessing, layout, and {total_records} record crop(s) across {len(pages)} page(s)"
-    )
+    else:
+        completion_message = (
+            f"[bold green]Marriage OCR process complete[/bold green] generated preprocessing, layout, "
+            f"and {total_records} record crop(s) across {len(pages)} page(s)"
+        )
     _emit_progress(
         progress_callback,
         page_index=len(pages),
@@ -318,6 +387,8 @@ def process_input(
         status_counts=status_counts,
         output_path=export_summary.output_path if export_summary is not None else None,
         debug_path=debug_path,
+        refinement_ocr_calls=total_refinement_ocr_calls,
+        refinement_audit_rows=refinement_audit_rows,
     )
     if temp_debug_workspace is not None:
         temp_debug_workspace.cleanup()
@@ -348,6 +419,160 @@ def _emit_progress(
             parsed_records=parsed_records,
             message=message,
         )
+    )
+
+
+class _CountingOcrEngineProxy:
+    def __init__(self, engine: Any) -> None:
+        self._engine = engine
+        self.name = getattr(engine, "name", "refinement")
+        self.read_calls = 0
+
+    def read_image(self, image_path: str | Path):
+        self.read_calls += 1
+        return self._engine.read_image(image_path)
+
+
+def refine_record_fields(
+    *,
+    parsed_record: ExtractedRecord,
+    record_output: Any,
+    record_crops: Any,
+    ocr_engine: Any,
+    settings: FieldRefinementSettings,
+    source_file: str | None = None,
+    source_page: int | None = None,
+) -> tuple[ExtractedRecord, list[FieldRefinementAuditRow], int]:
+    if not settings.enabled:
+        return parsed_record, [], 0
+
+    refined_record = parsed_record
+    audit_rows: list[FieldRefinementAuditRow] = []
+    total_retry_ocr_calls = 0
+
+    for field_name, crop_name in REFINEMENT_FIELD_CROPS.items():
+        crop_path = getattr(record_crops, "cell_paths", {}).get(crop_name)
+        if crop_path is None:
+            continue
+
+        current_value = getattr(refined_record, field_name, None)
+        original_value = _refinement_original_value(refined_record, field_name, current_value)
+        counting_engine = _CountingOcrEngineProxy(ocr_engine)
+        try:
+            decision = refine_field(
+                field_name,
+                original_value,
+                parsed_value=current_value,
+                crop_path=crop_path,
+                ocr_engine=counting_engine,
+                settings=settings,
+            )
+        except Exception as error:
+            decision = _build_failed_refinement_decision(
+                field_name=field_name,
+                original_value=original_value,
+                selected_value=current_value,
+                reason=f"refinement_error:{error.__class__.__name__}",
+            )
+        retry_calls = counting_engine.read_calls
+        total_retry_ocr_calls += retry_calls
+
+        if decision.selected_value is not None and decision.selected_value != current_value:
+            refined_record = replace(refined_record, **{field_name: decision.selected_value})
+
+        audit_rows.append(
+            _build_refinement_audit_row(
+                decision=decision,
+                source_file=source_file,
+                source_page=source_page,
+                record_index=getattr(record_output, "record_index", 0),
+                crop_path=crop_path,
+                retry_count=retry_calls,
+            )
+        )
+
+    return refined_record, audit_rows, total_retry_ocr_calls
+
+
+def _refinement_original_value(
+    record: ExtractedRecord,
+    field_name: str,
+    parsed_value: str | None,
+) -> str | None:
+    raw_field_map = {
+        "tarikh_nikah": "tarikh_nikah_raw",
+        "tarikh_keluar": "tarikh_keluar_raw",
+    }
+    raw_field_name = raw_field_map.get(field_name)
+    if raw_field_name is None:
+        return parsed_value
+    return getattr(record, raw_field_name, None) or parsed_value
+
+
+def _build_failed_refinement_decision(
+    *,
+    field_name: str,
+    original_value: str | None,
+    selected_value: str | None,
+    reason: str,
+) -> FieldRefinementDecision:
+    candidates: tuple[FieldCandidate, ...] = ()
+    if isinstance(selected_value, str) and selected_value.strip():
+        candidates = (
+            FieldCandidate(
+                value=selected_value.strip(),
+                source="original_ocr",
+                validity_score=0.0,
+                ocr_confidence=None,
+                plausibility_score=0.0,
+                similarity_score=1.0,
+                substitutions=0,
+                metadata={"field_name": field_name},
+            ),
+        )
+    return FieldRefinementDecision(
+        field_name=field_name,
+        original_value=original_value,
+        selected_value=selected_value,
+        candidates=candidates,
+        selected_candidate=candidates[0] if candidates else None,
+        requires_review=True,
+        reason=reason,
+    )
+
+
+def _build_refinement_audit_row(
+    *,
+    decision: Any,
+    source_file: str | None,
+    source_page: int | None,
+    record_index: int,
+    crop_path: Path,
+    retry_count: int,
+) -> FieldRefinementAuditRow:
+    selected_candidate = decision.selected_candidate
+    original_candidate = refinement_engine._find_original_candidate(list(decision.candidates))
+    selected_score = refinement_engine._candidate_score(selected_candidate, reference_value=decision.original_value)
+    original_score = refinement_engine._candidate_score(original_candidate, reference_value=decision.original_value)
+    return FieldRefinementAuditRow(
+        source_file=source_file or "",
+        page_number=source_page or 0,
+        record_index=record_index,
+        field_name=decision.field_name,
+        original_value=decision.original_value,
+        selected_value=decision.selected_value,
+        original_score=original_score,
+        selected_score=selected_score,
+        correction_type=(
+            str(selected_candidate.metadata.get("correction_type", selected_candidate.source))
+            if selected_candidate is not None
+            else "original_ocr"
+        ),
+        candidate_source=(selected_candidate.source if selected_candidate is not None else "original_ocr"),
+        reason=decision.reason,
+        requires_review=decision.requires_review,
+        crop_path=str(crop_path),
+        retry_count=retry_count,
     )
 
 

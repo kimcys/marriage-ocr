@@ -10,6 +10,8 @@ from marriage_ocr.review_store import (
     load_review_bundle,
     save_corrected_record,
 )
+from marriage_ocr.refinement.audit import save_refinement_audit_sidecar
+from marriage_ocr.refinement.models import FieldRefinementAuditRow
 
 
 EXPORT_CONFIG = {
@@ -56,6 +58,34 @@ def test_review_store_saves_and_reloads_corrected_record(tmp_path: Path) -> None
     assert bundle.verified is True
     assert bundle.reviewed_by == "QA User"
     assert bundle.review_notes == "Checked against source image"
+
+
+def test_review_store_loads_refinement_audit_rows(tmp_path: Path) -> None:
+    record_dir = _create_record_dir(tmp_path, source_record="record_001", bil="1")
+    rows = [
+        FieldRefinementAuditRow(
+            source_file="sample.pdf",
+            page_number=1,
+            record_index=1,
+            field_name="nama_suami",
+            original_value="AHMAD B1N ALI",
+            selected_value="AHMAD BIN ALI",
+            original_score=0.61,
+            selected_score=0.86,
+            correction_type="connector_typo",
+            candidate_source="retry_grayscale",
+            reason="Connector correction supported by retry OCR",
+            requires_review=False,
+            crop_path="crops/page_1/record_1/nama_suami.png",
+            retry_count=2,
+        )
+    ]
+    save_refinement_audit_sidecar(record_dir, rows)
+
+    bundle = load_review_bundle(record_dir)
+
+    assert bundle.refinement_audit_rows == rows
+    assert bundle.refinement_audit_rows[0].candidate_source == "retry_grayscale"
 
 
 def test_review_export_uses_corrected_records_and_verified_filter(tmp_path: Path) -> None:

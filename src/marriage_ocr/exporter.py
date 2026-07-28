@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
@@ -82,6 +83,8 @@ PUBLIC_XLSX_COLUMNS = [
     "Created At",
     "Updated At",
 ]
+
+PUBLIC_CSV_COLUMNS = [column for column in PUBLIC_XLSX_COLUMNS if column not in {"Created At", "Updated At"}]
 
 EXPORT_COLUMN_TO_FIELD = {
     "Bil": "bil",
@@ -185,6 +188,66 @@ def export_records_to_xlsx(
         written_count=written_count,
         skipped_duplicates=skipped_duplicates,
         total_rows=max(0, worksheet.max_row - 1),
+        output_path=output_path,
+    )
+
+
+def export_records_to_csv(
+    records: Iterable[ExtractedRecord],
+    output_path: Path,
+    export_config: Mapping[str, Any],
+    *,
+    reset_output: bool = False,
+    skip_existing: bool = False,
+) -> ExportSummary:
+    append_mode = bool(export_config.get("append", True))
+    dedupe_enabled = bool(export_config.get("dedupe", True)) or skip_existing
+
+    record_list = list(records)
+    existing_rows: list[dict[str, Any]] = []
+    existing_keys: set[tuple[str, ...]] = set()
+
+    if reset_output and output_path.exists():
+        output_path.unlink()
+
+    if output_path.exists() and append_mode:
+        with output_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                existing_rows.append({column: row.get(column) for column in PUBLIC_CSV_COLUMNS})
+                if dedupe_enabled:
+                    key = _csv_row_dedupe_key(row)
+                    if key is not None:
+                        existing_keys.add(key)
+
+    now = _timestamp_now()
+    new_rows: list[dict[str, Any]] = []
+    written_count = 0
+    skipped_duplicates = 0
+
+    for record in record_list:
+        export_row = record_to_export_dict(record, timestamp=now, columns=PUBLIC_CSV_COLUMNS)
+        dedupe_key = _csv_record_dedupe_key(record)
+        if dedupe_enabled and dedupe_key is not None and dedupe_key in existing_keys:
+            skipped_duplicates += 1
+            continue
+        new_rows.append(export_row)
+        written_count += 1
+        if dedupe_key is not None:
+            existing_keys.add(dedupe_key)
+
+    rows_to_write = [*existing_rows, *new_rows] if append_mode and output_path.exists() else new_rows
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PUBLIC_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows_to_write:
+            writer.writerow({column: row.get(column) for column in PUBLIC_CSV_COLUMNS})
+
+    return ExportSummary(
+        written_count=written_count,
+        skipped_duplicates=skipped_duplicates,
+        total_rows=len(rows_to_write),
         output_path=output_path,
     )
 
@@ -417,6 +480,20 @@ def _record_dedupe_key(record: ExtractedRecord) -> tuple[str, ...] | None:
         source_record=record.source_record,
         crop_folder=record.crop_folder,
     )
+
+
+def _csv_row_dedupe_key(row: Mapping[str, Any]) -> tuple[str, ...] | None:
+    values = [row.get(column) for column in PUBLIC_CSV_COLUMNS]
+    if any(value not in {None, ""} for value in values):
+        return tuple("" if value is None else str(value) for value in values)
+    return None
+
+
+def _csv_record_dedupe_key(record: ExtractedRecord) -> tuple[str, ...] | None:
+    values = [record_to_export_dict(record, columns=PUBLIC_CSV_COLUMNS).get(column) for column in PUBLIC_CSV_COLUMNS]
+    if any(value not in {None, ""} for value in values):
+        return tuple("" if value is None else str(value) for value in values)
+    return None
 
 
 def _build_dedupe_key(
