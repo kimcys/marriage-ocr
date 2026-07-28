@@ -74,3 +74,15 @@ Result:
 - Automatic `refinement_audit.csv` writing only happens when debug artifacts are retained, matching the retained-debug workflow and avoiding unexpected writes in non-debug runs.
 - The aggregate CSV is written at `debug/refinement_audit.csv`.
 - Per-record review sidecars are written at each record directory as `refinement_audit.json`.
+
+## Post-Review Fix
+
+Addressed reviewer feedback in commit `3108cee`:
+
+- Preserved `correction_type` separately from `candidate_source` by storing and reading `correction_type` in candidate metadata.
+- Disabled refinement no longer writes empty per-record audit sidecars.
+- Added targeted tests covering both regressions.
+
+Final verification after the fix:
+
+- `./.venv/bin/python -m pytest -q` -> `170 passed, 5 warnings`
