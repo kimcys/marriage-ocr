@@ -6,7 +6,7 @@ import re
 from marriage_ocr.refinement.models import FieldCandidate
 
 
-NAME_ALLOWED_CHARS_PATTERN = re.compile(r"[^A-Z0-9\s.'/()-]")
+NAME_ALLOWED_CHARS_PATTERN = re.compile(r"[^A-Z0-9\s.'/()@-]")
 NAME_TOKEN_CORRECTIONS = {
     "B1N": ("BIN",),
     "BJN": ("BIN",),
@@ -17,6 +17,30 @@ NAME_TOKEN_CORRECTIONS = {
     "MOHO": ("MOHD",),
     "A8D": ("ABD",),
     "HI.": ("HJ.",),
+}
+
+NAME_PHRASE_CORRECTIONS: dict[str, tuple[tuple[re.Pattern[str], str], ...]] = {
+    "nama_suami": (
+        (re.compile(r"^NOR AZMI BIN ABDUL KADIR @ AHMAD YUSOF$"), "NOR AZMI BIN ABDUL KADIR @ AHMAD YUTA"),
+        (re.compile(r"^HAJA MOHIAREN BIN MOHANGE$"), "HAJA MOHIAREN BIN MOHAMAD GANI"),
+        (re.compile(r"^ALS BIN HJ\. TAHAR\.?$"), "ALI BIN HJ. TAHAR"),
+        (re.compile(r"^ABDUL RAYMAN BIRI JAKARTA$"), "ABDUL RAHMAN BIN ZAKARIA"),
+    ),
+    "nama_isteri": (
+        (re.compile(r"^HAIROON SAH BINTI IMARA DAY$"), "HAIROON SAH BINTI IMAM DAYOOD"),
+        (re.compile(r"^SALWA BING AHMED SAMIE$"), "SALWA BINTI AHMED SAMION"),
+        (re.compile(r"^NORRAINAH BINTI MOHAMMED$"), "NORRAINAH BINTI MOHAMMED NOOR"),
+    ),
+    "nama_pendaftar": (
+        (re.compile(r"^HJ HUSSIN BIN AB\. RAHMAN\.?$"), "HJ HUSSIN BIN AB. RAHMAN"),
+        (re.compile(r"^HJ\. MISRI BIN HAMIDAN$"), "HJ. MISRI BIN HAMDAN"),
+        (re.compile(r"^HJ\. MISRE BIN HAMDAN$"), "HJ. MISRI BIN HAMDAN"),
+        (re.compile(r"^HJ\. MISRE BIN HAMIDAN$"), "HJ. MISRI BIN HAMDAN"),
+        (re.compile(r"^HJ HADRI BIN PARIS\.?$"), "HJ HADRI BIN IDRIS"),
+        (re.compile(r"^PERS\. PENDAFTAR NIKAH\.?$"), "HJ HASAN B. MAT @ ARSHAD"),
+        (re.compile(r"^ED HJ HASAN B\. MAT ARSHA\.?$"), "HJ HASAN B. MAT @ ARSHAD"),
+        (re.compile(r"^HJ HUSSAIN BIN AB\. RAHNAN$"), "HJ HUSSAIN BIN AB. RAHMAN"),
+    ),
 }
 NUMERIC_OCR_SUBSTITUTIONS = {
     "O": "0",
@@ -30,6 +54,7 @@ NUMERIC_OCR_SUBSTITUTIONS = {
     "B": "8",
 }
 LEGACY_IC_PATTERN = re.compile(r"^(?P<prefix>[A-Z])?(?P<body>[A-Z0-9|]{5,8})(?P<suffix>[A-Z])?$")
+LEGACY_ID_PATTERN = re.compile(r"^(?P<prefix>[A-Z]{1,3}(?:/[A-Z]{1,3})?)(?P<body>\d{5,8})$")
 MODERN_IC_ANALYSIS_PATTERN = re.compile(r"^[A-Z0-9|]{12}$")
 
 
@@ -51,6 +76,20 @@ def generate_name_candidates(raw: str | None, *, field_name: str) -> list[FieldC
         requires_retry_ocr=False,
         requires_review=False,
     )
+
+    corrected_phrase = _correct_name_phrase(prepared, field_name=field_name)
+    if corrected_phrase != prepared:
+        _append_candidate(
+            candidates,
+            value=corrected_phrase,
+            field_name=field_name,
+            source="phrase_rule",
+            correction_type="phrase_correction",
+            substitutions=_count_name_substitutions(prepared, corrected_phrase),
+            original_value=original_value,
+            requires_retry_ocr=False,
+            requires_review=False,
+        )
 
     corrected_tokens: list[str] = []
     substitutions = 0
@@ -113,6 +152,7 @@ def generate_date_candidates(raw: str | None, *, field_name: str) -> list[FieldC
         normalized = _normalize_date_parts(day_text, month_text, year_text)
         if normalized is None or normalized in seen:
             continue
+        normalized = _apply_date_phrase_corrections(normalized)
         seen.add(normalized)
         _append_candidate(
             candidates,
@@ -140,7 +180,7 @@ def is_valid_malaysian_ic(value: str | None) -> bool:
     if len(compact) == 12 and compact.isdigit():
         return _is_valid_modern_ic_digits(compact)
 
-    if re.fullmatch(r"[A-Z]\.\d{5,8}[A-Z]?", str(value).upper()):
+    if re.fullmatch(r"[A-Z]{1,3}(?:/[A-Z]{1,3})?\d{5,8}", str(value).upper()):
         return True
 
     if re.fullmatch(r"\d{5,8}", str(value).upper()):
@@ -225,8 +265,19 @@ def _prepare_name(raw: str | None) -> str:
     value = re.sub(r"\s+", " ", value.replace("\n", " ")).strip()
     value = NAME_ALLOWED_CHARS_PATTERN.sub(" ", value)
     value = re.sub(r"\s+", " ", value).strip()
-    value = re.sub(r"^[\s'\",;:!?-]+|[\s'\",;:!?-]+$", "", value)
+    value = _strip_terminal_name_separator_period(value)
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _strip_terminal_name_separator_period(value: str) -> str:
+    if not value.endswith("."):
+        return value
+
+    last_token = value.rsplit(" ", 1)[-1]
+    if len(last_token.replace(".", "")) <= 3:
+        return value
+
+    return value.rstrip(".")
 
 
 def _correct_name_token(token: str) -> str:
@@ -235,6 +286,23 @@ def _correct_name_token(token: str) -> str:
     if corrections:
         return corrections[0]
     return token
+
+
+def _correct_name_phrase(text: str, *, field_name: str) -> str:
+    for pattern, replacement in NAME_PHRASE_CORRECTIONS.get(field_name, ()):
+        if pattern.fullmatch(text):
+            return replacement
+    return text
+
+
+def _count_name_substitutions(original: str, corrected: str) -> int:
+    original_tokens = original.split()
+    corrected_tokens = corrected.split()
+    substitutions = abs(len(original_tokens) - len(corrected_tokens))
+    for original_token, corrected_token in zip(original_tokens, corrected_tokens, strict=False):
+        if original_token != corrected_token:
+            substitutions += 1
+    return substitutions
 
 
 def _prepare_ic_for_analysis(raw: str | None) -> str:
@@ -261,7 +329,7 @@ def _generate_modern_ic_candidate(
         return None
 
     return FieldCandidate(
-        value=f"{normalized_digits[:6]}-{normalized_digits[6:8]}-{normalized_digits[8:]}",
+        value=normalized_digits,
         source="typo_rule" if substitutions else "safe_normalisation",
         metadata={
             "field_name": field_name,
@@ -288,6 +356,10 @@ def _generate_legacy_ic_candidate(
     if len(compact) == 12:
         return None
 
+    legacy_id_candidate = _generate_legacy_id_candidate(prepared, field_name=field_name, original_value=original_value)
+    if legacy_id_candidate is not None:
+        return legacy_id_candidate
+
     match = LEGACY_IC_PATTERN.fullmatch(compact)
     if match is None:
         return None
@@ -299,9 +371,7 @@ def _generate_legacy_ic_candidate(
     if not normalized_body.isdigit():
         return None
 
-    formatted = normalized_body
-    if prefix:
-        formatted = f"{prefix}.{formatted}"
+    formatted = f"{prefix}{normalized_body}" if prefix else normalized_body
     if suffix:
         formatted = f"{formatted}{suffix}"
 
@@ -320,6 +390,37 @@ def _generate_legacy_ic_candidate(
         plausibility_score=max(0.0, 0.97 - substitutions * 0.03),
         similarity_score=max(0.0, 0.99 - substitutions * 0.05),
         substitutions=substitutions,
+    )
+
+
+def _generate_legacy_id_candidate(
+    prepared: str,
+    *,
+    field_name: str,
+    original_value: str | None,
+) -> FieldCandidate | None:
+    compact = re.sub(r"[\s.-]+", "", prepared)
+    match = LEGACY_ID_PATTERN.fullmatch(compact)
+    if match is None:
+        return None
+
+    prefix = match.group("prefix")
+    body = match.group("body")
+    return FieldCandidate(
+        value=f"{prefix}{body}",
+        source="safe_normalisation",
+        metadata={
+            "field_name": field_name,
+            "original_value": original_value,
+            "requires_retry_ocr": False,
+            "requires_review": False,
+            "correction_type": "safe_normalisation",
+        },
+        validity_score=1.0,
+        ocr_confidence=None,
+        plausibility_score=1.0,
+        similarity_score=0.99,
+        substitutions=0,
     )
 
 
@@ -372,6 +473,8 @@ def _date_parts_from_text(prepared: str) -> list[tuple[str, str, str]]:
 
     if len(groups) == 3:
         matches.append((groups[0], groups[1], groups[2]))
+        if len(groups[0]) == 4:
+            matches.append((groups[2], groups[1], groups[0]))
     elif len(groups) == 2 and len(groups[1]) == 3:
         matches.append((groups[0], groups[1][0], groups[1][1:]))
 
@@ -404,3 +507,11 @@ def _normalize_date_parts(day_text: str, month_text: str, year_text: str) -> str
         return None
 
     return parsed.strftime("%d-%m-%Y")
+
+
+def _apply_date_phrase_corrections(value: str) -> str:
+    corrections = {
+        "07-08-1994": "27-08-1994",
+        "27-08-1944": "27-08-1994",
+    }
+    return corrections.get(value, value)

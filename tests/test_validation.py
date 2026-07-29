@@ -91,7 +91,8 @@ def test_validation_marks_empty_ocr_failed() -> None:
 def test_validation_helpers_cover_ic_date_and_name_rules() -> None:
     assert is_valid_malaysian_ic("900101-10-1234") is True
     assert is_valid_malaysian_ic("991332-10-1234") is False
-    assert is_valid_malaysian_ic("A.1192345") is True
+    assert is_valid_malaysian_ic("A1192345") is True
+    assert is_valid_malaysian_ic("R/F119395") is True
     assert is_valid_date("2024-01-01") is True
     assert is_valid_date("27-08-1994") is True
     assert is_valid_date("31-02-1994") is False

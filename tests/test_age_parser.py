@@ -10,3 +10,7 @@ def test_age_parser_accepts_practical_age_examples() -> None:
 def test_age_parser_rejects_invalid_examples() -> None:
     assert parse_ages("257AHUN") == []
     assert parse_ages("1832779") == []
+
+
+def test_age_parser_repairs_common_ocr_confusion_for_seventies() -> None:
+    assert parse_ages("76 TAHUN") == [26]

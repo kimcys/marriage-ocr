@@ -29,11 +29,11 @@ def test_normalize_ic_classifies_old_and_new_numbers() -> None:
     assert normalize_ic("12-34") == (None, None)
 
 
-def test_normalize_date_preserves_document_separator() -> None:
-    assert normalize_date_preserving_style("21.09.1984") == "21.09.1984"
-    assert normalize_date_preserving_style(" 28 / 04 / 2009 ") == "28/04/2009"
+def test_normalize_date_normalizes_to_day_month_year() -> None:
+    assert normalize_date_preserving_style("21.09.1984") == "21-09-1984"
+    assert normalize_date_preserving_style(" 28 / 04 / 2009 ") == "28-04-2009"
     assert normalize_date_preserving_style("31.02.2009") is None
-    assert normalize_date_preserving_style("25 ZULHIJJAH 1404\n21.09.1984") == "21.09.1984"
+    assert normalize_date_preserving_style("25 ZULHIJJAH 1404\n21.09.1984") == "21-09-1984"
 
 
 def test_normalize_mas_kahwin_preserves_rm_full_text() -> None:

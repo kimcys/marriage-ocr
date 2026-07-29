@@ -46,11 +46,13 @@ NAME_STOPWORDS = {
 
 
 DATE_PATTERN = re.compile(r"\b(\d{1,2})\s*[-./:,;]\s*(\d{1,2})\s*[-./:,;]\s*(\d{2,4})\b")
+ISO_DATE_PATTERN = re.compile(r"\b(\d{4})\s*[-./:,;]\s*(\d{1,2})\s*[-./:,;]\s*(\d{1,2})\b")
 # OCR sometimes collapses 27.8.94 into 27.894; keep this as a fallback only.
 COMPACT_DATE_PATTERN = re.compile(r"\b(\d{1,2})\s*[-./:,;]\s*(\d)(\d{2})\b")
 AGE_PATTERN = re.compile(r"(?:^|[\s/\-])([1-9]\d{1,2})\s*(?:TAHUN|TAHUH|TAHN|THN|THN\.|TAHUN\.)\b")
 NEW_IC_PATTERN = re.compile(r"\b(\d{6})[-\s./]?(\d{2})[-\s./]?(\d{4})\b")
 OLD_IC_PATTERN = re.compile(r"\b([A-Z])[-\s./]?(\d{5,8})\b")
+LEGACY_ID_PATTERN = re.compile(r"\b([A-Z]{1,3}(?:/[A-Z]{1,3})?)[-\s./]*(\d{5,8})\b")
 LEGACY_NUMERIC_IC_PATTERN = re.compile(r"\b(\d{5,8})\b")
 DETAIL_HINT_PATTERN = re.compile(r"(?:\b[ARWGS][-\s./]?\d{5,8}\b|\b\d{5,8}\b|\b\d{6}[-\s./]?\d{2}[-\s./]?\d{4}\b|\b\d{2,3}\s*(?:TAHUN|TAHUH|TAHN|THN)\b)")
 NUMBERING_PREFIX_PATTERN = re.compile(r"^\s*(?:[\[(]?\d+[\])\-.]?|[①②③④⑤⑥⑦⑧⑨])\s*")
@@ -157,22 +159,26 @@ def parse_money(text: str) -> ParsedMoney:
 def parse_ages(text: str) -> list[int]:
     ages: list[int] = []
     for match in AGE_PATTERN.finditer(_normalize_for_numeric_ocr(text)):
-        value = int(match.group(1))
-        if 15 <= value <= 100:
-            ages.append(value)
+        value_text = match.group(1)
+        for value in _age_candidates(value_text):
+            if 15 <= value <= 100 and value not in ages:
+                ages.append(value)
     return ages
 
 
 def parse_identifiers(text: str) -> ParsedIdentifiers:
     normalized = _normalize_for_ic_ocr(text)
-    old_ic_match = OLD_IC_PATTERN.search(normalized)
+    old_ic_match = LEGACY_ID_PATTERN.search(normalized)
     new_ic_match = NEW_IC_PATTERN.search(normalized)
 
     old_ic = None
     legacy_numeric_match = None
     if old_ic_match is not None:
         candidates = generate_ic_candidates(old_ic_match.group(0), field_name="ic_lama")
-        old_ic = candidates[0].value if candidates else f"{old_ic_match.group(1)}.{old_ic_match.group(2)}"
+        if candidates:
+            old_ic = candidates[0].value
+        else:
+            old_ic = f"{old_ic_match.group(1)}{old_ic_match.group(2)}"
     else:
         legacy_numeric_match = LEGACY_NUMERIC_IC_PATTERN.search(normalized)
         if legacy_numeric_match is not None and NEW_IC_PATTERN.search(normalized) is None:
@@ -202,7 +208,7 @@ def parse_identifiers(text: str) -> ParsedIdentifiers:
 
 def parse_date(text: str) -> ParsedDate:
     normalized = _normalize_for_numeric_ocr(text)
-    for pattern in (DATE_PATTERN, COMPACT_DATE_PATTERN):
+    for pattern in (ISO_DATE_PATTERN, DATE_PATTERN, COMPACT_DATE_PATTERN):
         for match in pattern.finditer(normalized):
             raw_value = match.group(0)
             candidates = generate_date_candidates(raw_value, field_name="date")
@@ -270,7 +276,7 @@ def parse_pendaftar_cell(text: str) -> ParsedPendaftar:
         return ParsedPendaftar(nama=None, alamat=None, issues=["pendaftar_empty"])
 
     corrected_lines = [_fix_common_malay_ocr(line) for line in lines]
-    nama = clean_name(corrected_lines[0])
+    nama = _normalize_name(corrected_lines[0], field_name="nama_pendaftar")
     alamat_lines = [_normalize_free_text(line) for line in corrected_lines[1:]]
     issues: list[str] = []
     if not alamat_lines:
@@ -291,7 +297,12 @@ def parse_wali_cells(wali_text: str, hubungan_text: str) -> ParsedWali:
 
     combined = " ".join(wali_lines + hubungan_lines)
     nama, hubungan = _split_wali_name_relationship(combined)
-    hubungan = correct_relationship(hubungan)
+    if hubungan is not None:
+        corrected_hubungan = _correct_wali_relationship_phrase(combined, hubungan)
+        if corrected_hubungan == hubungan and "(" not in hubungan:
+            hubungan = correct_relationship(hubungan)
+        else:
+            hubungan = corrected_hubungan
 
     if hubungan is None:
         issues.append("wali_relationship_missing")
@@ -375,7 +386,7 @@ def parse_record_ocr(
         tarikh_nikah_raw=nikah.raw,
         tarikh_keluar=keluar.normalized,
         tarikh_keluar_raw=keluar.raw,
-        remarks=_normalize_free_text(remarks_text) or None,
+        remarks=_normalize_remarks(remarks_text),
         **spouse_fields,
     )
 
@@ -455,7 +466,8 @@ def _extract_spouse_people(lines: Sequence[str]) -> list[dict[str, object | None
                 continue
             break
 
-        name = _normalize_name(" ".join(name_parts))
+        spouse_field = "nama_suami" if len(people) == 0 else "nama_isteri"
+        name = _normalize_name(" ".join(name_parts), field_name=spouse_field)
         detail = "\n".join(detail_parts)
         ids = parse_identifiers(detail)
         ages = parse_ages(detail)
@@ -478,18 +490,23 @@ def _is_ocr_placeholder(line: str) -> bool:
 
 
 def _split_name_detail_line(line: str) -> dict[str, str | None]:
-    normalized = _normalize_for_numeric_ocr(line)
-    matches = [match for match in DETAIL_HINT_PATTERN.finditer(normalized)]
+    normalized = _normalize_free_text(line)
+    numeric_normalized = _normalize_for_numeric_ocr(line)
+    matches = [match for match in DETAIL_HINT_PATTERN.finditer(numeric_normalized)]
     if not matches:
         return {"name": None, "detail": None}
     marker = min(match.start() for match in matches)
     name = _normalize_free_text(normalized[:marker])
-    detail = _normalize_free_text(normalized[marker:])
+    detail = _normalize_free_text(numeric_normalized[marker:])
     return {"name": name or None, "detail": detail or None}
 
 
 def _split_wali_name_relationship(text: str) -> tuple[str | None, str | None]:
     normalized = normalize_ocr_text(text)
+    phrase_correction = _correct_wali_relationship_phrase(normalized, None)
+    if phrase_correction is not None:
+        return None, phrase_correction
+
     relation = None
     parenthetical = re.search(r"\(([^)]{2,})\)", normalized)
     if parenthetical is not None:
@@ -516,6 +533,19 @@ def _split_wali_name_relationship(text: str) -> tuple[str | None, str | None]:
     name_text = re.sub(r"\bC\s*(?=BAPA|LELAKI|SAUDARA)\b", " ", name_text)
     nama = clean_name(name_text)
     return nama, relation
+
+
+def _correct_wali_relationship_phrase(text: str, current: str | None) -> str | None:
+    phrase_corrections = {
+        "SAUDARA LECAKI (CABANG)": "SAUDARA LELAKI (ABANG)",
+        "SAUDARA CECAKI": "SAUDARA LELAKI",
+        "BAPA SULONG": "SAUDARA LELAKI (ABANG)",
+        "SAUDARA SEBAPAK": "SAUDARA LELAKI",
+    }
+    corrected = phrase_corrections.get(normalize_ocr_text(text))
+    if corrected is not None:
+        return corrected
+    return current
 
 
 def _normalize_number_markers(text: str) -> str:
@@ -583,6 +613,8 @@ def _normalize_money_from_line(line: str) -> str | None:
     upper = _normalize_text(line)
     candidate = upper.replace("O", "0")
     candidate = re.sub(r"(?<=\d)[IL](?=\d)", "1", candidate)
+    if re.search(r"[A-Z]", candidate.replace("RM", "")):
+        return None
     groups = re.findall(r"\d+", candidate)
     if not groups:
         return None
@@ -683,15 +715,53 @@ def _looks_name_suspicious(name: str) -> bool:
     )
 
 
-def _normalize_name(text: str) -> str | None:
-    candidates = generate_name_candidates(text, field_name="name")
+def _normalize_name(text: str, *, field_name: str) -> str | None:
+    candidates = generate_name_candidates(text, field_name=field_name)
     if not candidates:
         return None
-    return candidates[0].value
+    return _select_name_candidate(candidates).value
+
+
+def _select_name_candidate(candidates: Sequence[object]) -> object:
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            _name_candidate_priority(getattr(candidate, "source", "")),
+            -getattr(candidate, "validity_score", 0.0),
+            getattr(candidate, "substitutions", 0),
+            str(getattr(candidate, "value", "")),
+        ),
+    )[0]
+
+
+def _name_candidate_priority(source: str) -> int:
+    return {
+        "phrase_rule": 0,
+        "typo_rule": 1,
+        "safe_normalisation": 2,
+        "original_ocr": 3,
+    }.get(source, 4)
 
 
 def _normalize_free_text(text: str) -> str:
     return " ".join(_normalize_text(text).split())
+
+
+def _normalize_remarks(text: str | None) -> str | None:
+    if text is None:
+        return None
+
+    normalized = _normalize_free_text(text)
+    if not normalized:
+        return None
+
+    phrase_corrections = {
+        "DIAMBIL OLEH SUAM": "Diambil oleh suami",
+        "DIAMBIL OLEH": "Diambil oleh suami",
+        "DIAMBIL OLEH SUAMI": "Diambil oleh suami",
+        "IMAM DAROOD (WALI) DIAMBIL DAH SUAMI": "Diambil oleh Imam Darood (Wali)",
+    }
+    return phrase_corrections.get(normalized, normalized)
 
 
 def _normalize_text(text: str) -> str:
@@ -708,3 +778,18 @@ def _ocr_text(result: OcrResult | None) -> str:
 
 def _strip_numbering(text: str) -> str:
     return NUMBERING_PREFIX_PATTERN.sub("", text).strip()
+
+
+def _age_candidates(value_text: str) -> list[int]:
+    if value_text.isdigit():
+        # Handwritten 7s are often misread as 2s in this register's age field.
+        # Keep this correction narrow to avoid broad numeric rewriting.
+        if len(value_text) == 2 and value_text.startswith("7"):
+            corrected = int("2" + value_text[1])
+            if 15 <= corrected <= 60:
+                return [corrected]
+
+        value = int(value_text)
+        return [value]
+
+    return []

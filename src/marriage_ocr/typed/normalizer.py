@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import re
 from typing import Iterable
 
 from marriage_ocr.models import ExtractedRecord
 from marriage_ocr.typed.models import RawField
+from marriage_ocr.refinement.text_corrections import generate_date_candidates
 
 
 BIL_PATTERN = re.compile(r"\b\d+\s*/\s*\d{4}\b")
@@ -105,16 +105,17 @@ def normalize_age(raw: str | None, *, min_age: int, max_age: int) -> int | None:
 def normalize_date_preserving_style(raw: str | None) -> str | None:
     if raw is None:
         return None
-    text = str(raw).strip()
-    match = DATE_PATTERN.search(text)
-    if not match:
-        return None
-    day, separator, month, year = match.groups()
-    try:
-        datetime(int(year), int(month), int(day))
-    except ValueError:
-        return None
-    return f"{int(day):02d}{separator}{int(month):02d}{separator}{year}"
+
+    for line in (part.strip() for part in str(raw).splitlines() if part.strip()):
+        candidates = generate_date_candidates(line, field_name="date")
+        if candidates:
+            return candidates[0].value
+
+    candidates = generate_date_candidates(str(raw).strip(), field_name="date")
+    if candidates:
+        return candidates[0].value
+
+    return None
 
 
 def normalize_mas_kahwin(raw: str | None) -> str | None:

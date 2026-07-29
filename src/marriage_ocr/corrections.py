@@ -133,6 +133,10 @@ def clean_name(text: str | None) -> str | None:
     value = re.sub(r"[^A-Z\s.'/()-]", " ", value)
     value = re.sub(r"\b(?:TAHUN|TAHN|TAHUH|THN|RM|NO|NIKAH|KELUAR)\b", " ", value)
     value = re.sub(r"\s+", " ", value).strip()
+    if value.endswith("."):
+        last_token = value.rsplit(" ", 1)[-1]
+        if len(last_token.replace(".", "")) > 3:
+            value = value.rstrip(".")
 
     return value or None
 
