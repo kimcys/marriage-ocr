@@ -51,9 +51,14 @@ def test_extract_record_uses_single_client(tmp_path: Path) -> None:
         def __init__(self, **kwargs: object) -> None:
             self.kwargs = kwargs
 
+    class FakeHttpOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
     class FakeTypes:
         Part = FakePart
         GenerateContentConfig = FakeGenerateContentConfig
+        HttpOptions = FakeHttpOptions
 
     class Models:
         def __init__(self) -> None:
@@ -92,6 +97,140 @@ def test_extract_record_uses_single_client(tmp_path: Path) -> None:
     assert models.calls[0]["model"] == "gemini-2.5-flash"
 
 
+def test_extract_record_retries_transient_rate_limit_before_succeeding(tmp_path: Path) -> None:
+    """Regression: GeminiRecordExtractor._generate_content used to call
+    generate_content once with no retry. A single transient 429
+    (RESOURCE_EXHAUSTED) propagated straight to pipeline.py, which not only
+    fell back to parser-only validation for that record but (previously)
+    permanently disabled Gemini for the rest of the run -- see
+    pipeline.py::_should_disable_gemini_for_run. Retrying the call here
+    first means a routine rate-limit blip no longer costs an entire run's
+    worth of Gemini corroboration.
+    """
+    from google.genai import errors as genai_errors
+
+    class FakePart:
+        @staticmethod
+        def from_bytes(*, data: bytes, mime_type: str) -> dict[str, object]:
+            return {"data": data, "mime_type": mime_type}
+
+    class FakeGenerateContentConfig:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class FakeHttpOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class FakeTypes:
+        Part = FakePart
+        GenerateContentConfig = FakeGenerateContentConfig
+        HttpOptions = FakeHttpOptions
+
+    call_count = {"n": 0}
+    seen_configs: list[object] = []
+
+    class Models:
+        def generate_content(self, *, model: str, contents: list[object], config: object) -> SimpleNamespace:
+            call_count["n"] += 1
+            seen_configs.append(config)
+            if call_count["n"] < 3:
+                raise genai_errors.APIError(429, {"error": {"message": "rate limited"}})
+            return SimpleNamespace(text=json.dumps({"bil": "7"}))
+
+    class FakeClient:
+        def __init__(self, models: object) -> None:
+            self.models = models
+
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+    extractor.model = "gemini-2.5-flash"
+    extractor.temperature = 0.0
+    extractor.max_output_tokens = 4096
+    extractor.save_raw_json = False
+    extractor._types = FakeTypes()
+    extractor._client = FakeClient(Models())
+    extractor._api_key_source = "GEMINI_API_KEY"
+    extractor._build_prompt = lambda ocr_cells: "prompt"
+    extractor._api_attempts = 3
+    extractor._initial_delay_seconds = 0.0
+    extractor._backoff_multiplier = 1.0
+    extractor._request_timeout_seconds = 45.0
+
+    crop_path = tmp_path / "record.jpg"
+    crop_path.write_bytes(b"fake-image")
+
+    result = extractor.extract_record(
+        record_crop_path=crop_path,
+        ocr_cells={"bil": OcrResult(text="7", average_confidence=0.95)},
+    )
+
+    assert result.record.bil == "7"
+    assert call_count["n"] == 3
+    # A stalled connection must not hang a worker indefinitely -- every
+    # attempt must carry an explicit HTTP timeout (in ms).
+    assert all(config.kwargs["http_options"].kwargs["timeout"] == 45000 for config in seen_configs)
+
+
+def test_extract_record_gives_up_after_exhausting_retries_on_rate_limit(tmp_path: Path) -> None:
+    from google.genai import errors as genai_errors
+
+    class FakePart:
+        @staticmethod
+        def from_bytes(*, data: bytes, mime_type: str) -> dict[str, object]:
+            return {"data": data, "mime_type": mime_type}
+
+    class FakeGenerateContentConfig:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class FakeHttpOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class FakeTypes:
+        Part = FakePart
+        GenerateContentConfig = FakeGenerateContentConfig
+        HttpOptions = FakeHttpOptions
+
+    call_count = {"n": 0}
+
+    class Models:
+        def generate_content(self, *, model: str, contents: list[object], config: object) -> SimpleNamespace:
+            call_count["n"] += 1
+            raise genai_errors.APIError(429, {"error": {"message": "rate limited"}})
+
+    class FakeClient:
+        def __init__(self, models: object) -> None:
+            self.models = models
+
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+    extractor.model = "gemini-2.5-flash"
+    extractor.temperature = 0.0
+    extractor.max_output_tokens = 4096
+    extractor.save_raw_json = False
+    extractor._types = FakeTypes()
+    extractor._client = FakeClient(Models())
+    extractor._api_key_source = "GEMINI_API_KEY"
+    extractor._build_prompt = lambda ocr_cells: "prompt"
+    extractor._api_attempts = 2
+    extractor._initial_delay_seconds = 0.0
+    extractor._backoff_multiplier = 1.0
+
+    crop_path = tmp_path / "record.jpg"
+    crop_path.write_bytes(b"fake-image")
+
+    try:
+        extractor.extract_record(
+            record_crop_path=crop_path,
+            ocr_cells={"bil": OcrResult(text="7", average_confidence=0.95)},
+        )
+        assert False, "expected APIError to propagate after exhausting attempts"
+    except genai_errors.APIError:
+        pass
+
+    assert call_count["n"] == 2
+
+
 def test_build_prompt_uses_aggressive_handwritten_mode() -> None:
     extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
     extractor.config = {"prompt_mode": "handwritten_aggressive"}
@@ -115,9 +254,14 @@ def test_extract_record_prefers_sdk_parsed_payload(tmp_path: Path) -> None:
         def __init__(self, **kwargs: object) -> None:
             self.kwargs = kwargs
 
+    class FakeHttpOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
     class FakeTypes:
         Part = FakePart
         GenerateContentConfig = FakeGenerateContentConfig
+        HttpOptions = FakeHttpOptions
 
     class Models:
         def generate_content(self, *, model: str, contents: list[object], config: object) -> SimpleNamespace:

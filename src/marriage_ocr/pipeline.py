@@ -6,6 +6,7 @@ import tempfile
 from typing import Any, Callable, Mapping
 
 from marriage_ocr.config import load_runtime_config
+from marriage_ocr.error_reporting import write_error_report
 from marriage_ocr.logging_config import get_logger
 from marriage_ocr.models import ExtractedRecord
 from marriage_ocr.refinement import field_refinement as refinement_engine
@@ -43,6 +44,7 @@ class ProcessResult:
     debug_path: Path
     refinement_ocr_calls: int = 0
     refinement_audit_rows: list[FieldRefinementAuditRow] = field(default_factory=list)
+    failed_pages: list[str] = field(default_factory=list)
 
 
 ProgressCallback = Callable[[ProcessProgress], None]
@@ -165,140 +167,162 @@ def process_input(
     status_counts: dict[str, int] = {}
     refinement_audit_rows: list[FieldRefinementAuditRow] = []
     validated_records: list[ExtractedRecord] = []
+    failed_pages: list[str] = []
     ocr_engine = None if layout_only else build_ocr_engine(ocr_cfg)
 
     for index, page in enumerate(pages, start=1):
-        page_debug_dir = debug_root / page.debug_name
-        write_image(page_debug_dir / "original.jpg", page.image)
+        try:
+            page_debug_dir = debug_root / page.debug_name
+            write_image(page_debug_dir / "original.jpg", page.image)
 
-        processed = preprocess_image(page.image, settings)
-        write_image(page_debug_dir / "preprocessed.jpg", processed.binary)
-        layout = detect_layout(processed.color, processed.binary, layout_cfg)
-        write_image(page_debug_dir / "table_lines_overlay.jpg", create_table_overlay(processed.color, layout))
-        write_image(page_debug_dir / "record_boxes_overlay.jpg", create_record_overlay(processed.color, layout))
-        saved_records = save_record_crops(page_debug_dir, layout, processed.color, write_image)
-        total_records += len(layout.records)
-        page_ocr_cells = sum(len(record.cell_paths) for record in saved_records)
+            processed = preprocess_image(page.image, settings)
+            write_image(page_debug_dir / "preprocessed.jpg", processed.binary)
+            layout = detect_layout(processed.color, processed.binary, layout_cfg)
+            write_image(page_debug_dir / "table_lines_overlay.jpg", create_table_overlay(processed.color, layout))
+            write_image(page_debug_dir / "record_boxes_overlay.jpg", create_record_overlay(processed.color, layout))
+            saved_records = save_record_crops(page_debug_dir, layout, processed.color, write_image)
+            total_records += len(layout.records)
+            page_ocr_cells = sum(len(record.cell_paths) for record in saved_records)
 
-        page_parsed_records = 0
-        if ocr_engine is not None:
-            ocr_mode = str(
-                ocr_cfg.get("mode", "full_page" if ocr_engine.name == "google_vision" else "cell_crops")
-            ).strip().lower()
-            if ocr_mode in {"full_page", "page", "page_layout"}:
-                page_ocr_path = page_debug_dir / "google_vision_full_page.jpg"
-                write_image(page_ocr_path, processed.color)
-                record_ocr_outputs = run_ocr_on_page_layout(
-                    page_ocr_path,
-                    layout,
+            page_parsed_records = 0
+            if ocr_engine is not None:
+                ocr_mode = str(
+                    ocr_cfg.get("mode", "full_page" if ocr_engine.name == "google_vision" else "cell_crops")
+                ).strip().lower()
+                if ocr_mode in {"full_page", "page", "page_layout"}:
+                    page_ocr_path = page_debug_dir / "google_vision_full_page.jpg"
+                    write_image(page_ocr_path, processed.color)
+                    record_ocr_outputs = run_ocr_on_page_layout(
+                        page_ocr_path,
+                        layout,
+                        saved_records,
+                        ocr_engine,
+                        save_raw_json=ocr_save_raw_json,
+                    )
+                    total_ocr_cells += 1
+                    page_ocr_cells = 1
+                else:
+                    record_ocr_outputs = run_ocr_on_record_crops(
+                        saved_records,
+                        ocr_engine,
+                        save_raw_json=ocr_save_raw_json,
+                    )
+                    total_ocr_cells += page_ocr_cells
+
+                for record_output, record_layout, saved_record in zip(
+                    record_ocr_outputs,
+                    layout.records,
                     saved_records,
-                    ocr_engine,
-                    save_raw_json=ocr_save_raw_json,
-                )
-                total_ocr_cells += 1
-                page_ocr_cells = 1
-            else:
-                record_ocr_outputs = run_ocr_on_record_crops(
-                    saved_records,
-                    ocr_engine,
-                    save_raw_json=ocr_save_raw_json,
-                )
-                total_ocr_cells += page_ocr_cells
-
-            for record_output, record_layout, saved_record in zip(
-                record_ocr_outputs,
-                layout.records,
-                saved_records,
-                strict=True,
-            ):
-                parsed_record = parse_record_ocr_output(
-                    record_output,
-                    include_crop_folder=retain_debug_artifacts,
-                )
-                refined_record = parsed_record
-                record_refinement_rows: list[FieldRefinementAuditRow] = []
-                if ocr_engine is not None and refinement_settings.enabled:
-                    refined_record, record_refinement_rows, refinement_calls = refine_record_fields(
-                        parsed_record=parsed_record,
+                    strict=True,
+                ):
+                    parsed_record = parse_record_ocr_output(
+                        record_output,
+                        include_crop_folder=retain_debug_artifacts,
+                    )
+                    refined_record = parsed_record
+                    record_refinement_rows: list[FieldRefinementAuditRow] = []
+                    if ocr_engine is not None and refinement_settings.enabled:
+                        refined_record, record_refinement_rows, refinement_calls = refine_record_fields(
+                            parsed_record=parsed_record,
+                            record_output=record_output,
+                            record_crops=saved_record,
+                            ocr_engine=ocr_engine,
+                            settings=refinement_settings,
+                            source_file=str(page.relative_source),
+                            source_page=page.source_page,
+                        )
+                        total_refinement_ocr_calls += refinement_calls
+                        refinement_audit_rows.extend(record_refinement_rows)
+                    if retain_debug_artifacts:
+                        save_parsed_record(refined_record, record_output.record_dir / "parsed_record.json")
+                        if record_refinement_rows:
+                            save_refinement_audit_sidecar(record_output.record_dir, record_refinement_rows)
+                    layout_confidence = estimate_layout_confidence(
+                        marker_present=record_layout.marker_box is not None,
+                        cell_count=len(record_layout.cells),
+                        record_height=record_layout.box.height,
+                        min_record_height=int(layout_cfg.get("min_record_height_px", 80)),
+                        max_record_height=int(layout_cfg.get("max_record_height_px", 280)),
+                    )
+                    validated_record = _validate_record_with_optional_gemini(
+                        parsed_record=refined_record,
                         record_output=record_output,
-                        record_crops=saved_record,
-                        ocr_engine=ocr_engine,
-                        settings=refinement_settings,
+                        layout_confidence=layout_confidence,
+                        gemini_processor=gemini_processor,
+                        gemini_state=gemini_state,
+                        validation_config=validation_input,
+                        logger=logger,
                         source_file=str(page.relative_source),
                         source_page=page.source_page,
                     )
-                    total_refinement_ocr_calls += refinement_calls
-                    refinement_audit_rows.extend(record_refinement_rows)
-                if retain_debug_artifacts:
-                    save_parsed_record(refined_record, record_output.record_dir / "parsed_record.json")
-                    if record_refinement_rows:
-                        save_refinement_audit_sidecar(record_output.record_dir, record_refinement_rows)
-                layout_confidence = estimate_layout_confidence(
-                    marker_present=record_layout.marker_box is not None,
-                    cell_count=len(record_layout.cells),
-                    record_height=record_layout.box.height,
-                    min_record_height=int(layout_cfg.get("min_record_height_px", 80)),
-                    max_record_height=int(layout_cfg.get("max_record_height_px", 280)),
-                )
-                validated_record = _validate_record_with_optional_gemini(
-                    parsed_record=refined_record,
-                    record_output=record_output,
-                    layout_confidence=layout_confidence,
-                    gemini_processor=gemini_processor,
-                    gemini_state=gemini_state,
-                    validation_config=validation_input,
-                    logger=logger,
-                    source_file=str(page.relative_source),
-                    source_page=page.source_page,
-                )
-                validated_record = replace(
-                    validated_record,
-                    source_file=str(page.relative_source),
-                    source_page=page.source_page,
-                    source_record=validated_record.source_record or f"record_{record_output.record_index:03d}",
-                )
-                if retain_debug_artifacts:
-                    save_parsed_record(validated_record, record_output.record_dir / "validated_record.json")
-                status_counts[validated_record.status_review] = status_counts.get(validated_record.status_review, 0) + 1
-                validated_records.append(validated_record)
-                page_parsed_records += 1
-                total_parsed_records += 1
+                    validated_record = replace(
+                        validated_record,
+                        source_file=str(page.relative_source),
+                        source_page=page.source_page,
+                        source_record=validated_record.source_record or f"record_{record_output.record_index:03d}",
+                    )
+                    if retain_debug_artifacts:
+                        save_parsed_record(validated_record, record_output.record_dir / "validated_record.json")
+                    status_counts[validated_record.status_review] = status_counts.get(validated_record.status_review, 0) + 1
+                    validated_records.append(validated_record)
+                    page_parsed_records += 1
+                    total_parsed_records += 1
 
-        message = (
-            f"[green]{index}/{len(pages)}[/green] "
-            f"{page.relative_source} page {page.source_page}: "
-            f"detected {len(layout.records)} record(s)"
-            + (
-                f"; OCR saved for {page_ocr_cells} cell crop(s); parsed and validated {page_parsed_records} record(s)"
-                if ocr_engine is not None
-                else "; layout-only mode skipped OCR"
+            message = (
+                f"[green]{index}/{len(pages)}[/green] "
+                f"{page.relative_source} page {page.source_page}: "
+                f"detected {len(layout.records)} record(s)"
+                + (
+                    f"; OCR saved for {page_ocr_cells} cell crop(s); parsed and validated {page_parsed_records} record(s)"
+                    if ocr_engine is not None
+                    else "; layout-only mode skipped OCR"
+                )
+                + (
+                    f"; retained debug artifacts at {page_debug_dir}"
+                    if retain_debug_artifacts
+                    else "; debug artifacts were not retained"
+                )
             )
-            + (
-                f"; retained debug artifacts at {page_debug_dir}"
-                if retain_debug_artifacts
-                else "; debug artifacts were not retained"
+            _emit_progress(
+                progress_callback,
+                page_index=index,
+                page_total=len(pages),
+                source_file=str(page.relative_source),
+                source_page=page.source_page,
+                detected_records=len(layout.records),
+                parsed_records=page_parsed_records,
+                message=message,
             )
-        )
-        _emit_progress(
-            progress_callback,
-            page_index=index,
-            page_total=len(pages),
-            source_file=str(page.relative_source),
-            source_page=page.source_page,
-            detected_records=len(layout.records),
-            parsed_records=page_parsed_records,
-            message=message,
-        )
-        logger.info(
-            "Processed page %s/%s source=%s page=%s records=%s ocr_cells=%s debug_dir=%s",
-            index,
-            len(pages),
-            page.relative_source,
-            page.source_page,
-            len(layout.records),
-            page_ocr_cells if ocr_engine is not None else 0,
-            page_debug_dir,
-        )
+            logger.info(
+                "Processed page %s/%s source=%s page=%s records=%s ocr_cells=%s debug_dir=%s",
+                index,
+                len(pages),
+                page.relative_source,
+                page.source_page,
+                len(layout.records),
+                page_ocr_cells if ocr_engine is not None else 0,
+                page_debug_dir,
+            )
+        except Exception as error:
+            failed_pages.append(str(page.relative_source))
+            logger.exception(
+                "Failed to process page %s/%s source=%s page=%s -- skipping this page and continuing",
+                index,
+                len(pages),
+                page.relative_source,
+                page.source_page,
+            )
+            write_error_report(
+                error,
+                command_name="process_page",
+                extra_context={
+                    "source_file": str(page.relative_source),
+                    "source_page": page.source_page,
+                    "page_index": index,
+                    "page_total": len(pages),
+                },
+            )
+            continue
 
     postprocess_cfg = dict(cfg.get("postprocess", {}))
     bil_sequence_cfg = dict(postprocess_cfg.get("bil_sequence", {}))
@@ -357,6 +381,11 @@ def process_input(
             f"[bold green]Marriage OCR process complete[/bold green] generated preprocessing, layout, "
             f"and {total_records} record crop(s) across {len(pages)} page(s)"
         )
+    if failed_pages:
+        completion_message += (
+            f" [bold red]-- {len(failed_pages)} page(s) FAILED and were skipped, "
+            f"records for other pages were still saved; see error reports[/bold red]"
+        )
     _emit_progress(
         progress_callback,
         page_index=len(pages),
@@ -368,13 +397,16 @@ def process_input(
         message=completion_message,
     )
     logger.info(
-        "Process completed records=%s parsed_records=%s ocr_cells=%s statuses=%s export=%s",
+        "Process completed records=%s parsed_records=%s ocr_cells=%s statuses=%s export=%s failed_pages=%s",
         total_records,
         total_parsed_records,
         total_ocr_cells,
         status_summary,
         export_summary.output_path if export_summary is not None else None,
+        len(failed_pages),
     )
+    if failed_pages:
+        logger.warning("Pages that failed and were skipped: %s", failed_pages)
 
     if loaded.env_file is not None:
         logger.debug("Effective environment sourced from %s", loaded.env_file)
@@ -389,6 +421,7 @@ def process_input(
         debug_path=debug_path,
         refinement_ocr_calls=total_refinement_ocr_calls,
         refinement_audit_rows=refinement_audit_rows,
+        failed_pages=failed_pages,
     )
     if temp_debug_workspace is not None:
         temp_debug_workspace.cleanup()
@@ -680,6 +713,21 @@ def _validate_record_with_optional_gemini(
 
 
 def _should_disable_gemini_for_run(error: Exception) -> bool:
+    """Only permanently disable Gemini for errors that retrying cannot fix.
+
+    A single transient 429/RESOURCE_EXHAUSTED used to land here too, lumped
+    in with genuinely permanent conditions (revoked key, no permission) --
+    but GeminiRecordExtractor._generate_content now retries transient errors
+    with backoff on its own (see gemini_extractor.py), so by the time an
+    error reaches this point, retrying already failed for this one call.
+    Permanently disabling Gemini for the *rest of the run* on a rate-limit
+    blip is far too broad a response: at 1M-record scale with many parallel
+    workers, transient 429s are the routine case, not the exception, and a
+    permanent per-run disable would silently downgrade a large fraction of
+    records to parser-only accuracy for no real reason. Only disable for
+    conditions where retrying, or trying again on a later record, cannot
+    help: a revoked/leaked API key or a permissions/auth problem.
+    """
     error_text = " ".join(
         str(part)
         for part in (
@@ -695,10 +743,6 @@ def _should_disable_gemini_for_run(error: Exception) -> bool:
             "permission_denied",
             "permission denied",
             "unauthenticated",
-            "resource_exhausted",
-            "quota exceeded",
-            "too many requests",
-            "429",
             "403",
             "401",
         )

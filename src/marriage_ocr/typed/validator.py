@@ -4,6 +4,7 @@ import re
 from typing import Mapping, Sequence
 
 from marriage_ocr.models import ExtractedRecord
+from marriage_ocr.refinement.text_corrections import is_valid_malaysian_ic
 from marriage_ocr.typed.models import FieldDiagnostic, ProcessingStatus, RawField, ValidationSummary
 from marriage_ocr.typed.normalizer import BIL_PATTERN, DATE_PATTERN, MAS_KAHWIN_PATTERN
 
@@ -123,7 +124,7 @@ def validate_record(
             valid = bool(record.nama_suami and _non_label_text(record.nama_suami, output_name))
         elif key == "id_suami":
             valid = bool(record.ic_lama_suami or record.ic_baru_suami)
-            if record.ic_lama_suami and not re.fullmatch(r"\d{7,8}", record.ic_lama_suami):
+            if record.ic_lama_suami and not is_valid_malaysian_ic(record.ic_lama_suami):
                 valid = False
             if record.ic_baru_suami and not re.fullmatch(r"\d{12}", record.ic_baru_suami):
                 valid = False
@@ -133,7 +134,7 @@ def validate_record(
             valid = bool(record.nama_isteri and _non_label_text(record.nama_isteri, output_name))
         elif key == "id_isteri":
             valid = bool(record.ic_lama_isteri or record.ic_baru_isteri)
-            if record.ic_lama_isteri and not re.fullmatch(r"\d{7,8}", record.ic_lama_isteri):
+            if record.ic_lama_isteri and not is_valid_malaysian_ic(record.ic_lama_isteri):
                 valid = False
             if record.ic_baru_isteri and not re.fullmatch(r"\d{12}", record.ic_baru_isteri):
                 valid = False

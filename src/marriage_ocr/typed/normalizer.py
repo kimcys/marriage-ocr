@@ -68,10 +68,13 @@ def normalize_bil(raw: str | None) -> str | None:
     return re.sub(r"\s*/\s*", "/", match.group(0)).strip()
 
 
+_OLD_IC_LETTER_PATTERN = re.compile(r"(?:[A-Z]{1,3}/[A-Z]{1,3}|[A-Z])[-\s./]*\d{5,7}")
+
+
 def normalize_ic(raw: str | None) -> tuple[str | None, str | None]:
     if raw is None:
         return (None, None)
-    text = str(raw)
+    text = str(raw).upper()
     new_ic_patterns = (
         re.compile(r"\b\d{6}[\s./-]*\d{2}[\s./-]*\d{4}\b"),
         re.compile(r"\b\d{12}\b"),
@@ -82,6 +85,14 @@ def normalize_ic(raw: str | None) -> tuple[str | None, str | None]:
             digits = re.sub(r"\D", "", match.group(0))
             if len(digits) == 12:
                 return (None, digits)
+    # Old-format ICs are letter-prefixed (e.g. "A1192345", "R/F119395"), never a
+    # bare digit run -- without this, e.g. a wali's or witness's old IC on a
+    # typed form was silently dropped entirely (not even the digits survived,
+    # since \b\d{7,8}\b never matches when the letter is directly attached
+    # with no separator, which is the normal old-IC format).
+    letter_match = _OLD_IC_LETTER_PATTERN.search(text)
+    if letter_match:
+        return (re.sub(r"[\s.]", "", letter_match.group(0)), None)
     old_match = re.search(r"\b\d{7,8}\b", text)
     if old_match:
         return (old_match.group(0), None)

@@ -29,6 +29,18 @@ def test_normalize_ic_classifies_old_and_new_numbers() -> None:
     assert normalize_ic("12-34") == (None, None)
 
 
+def test_normalize_ic_keeps_old_ic_letter_prefix() -> None:
+    # Regression: old-format ICs are always letter-prefixed (e.g. "A1192345"),
+    # never a bare digit run. Before this, normalize_ic only matched
+    # \b\d{7,8}\b for the old-IC fallback, which never matches when a letter is
+    # directly attached with no separator (the normal old-IC format) -- so a
+    # wali's or witness's old IC on a typed form was dropped entirely, not just
+    # missing its prefix.
+    assert normalize_ic("A1192345") == ("A1192345", None)
+    assert normalize_ic("No. Kad Pengenalan: A. 1192345") == ("A1192345", None)
+    assert normalize_ic("R/F 119395") == ("R/F119395", None)
+
+
 def test_normalize_date_normalizes_to_day_month_year() -> None:
     assert normalize_date_preserving_style("21.09.1984") == "21-09-1984"
     assert normalize_date_preserving_style(" 28 / 04 / 2009 ") == "28-04-2009"

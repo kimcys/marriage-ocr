@@ -74,7 +74,16 @@ def merge_parser_and_gemini(
         if _blank(parser_value):
             chosen[field] = gemini_value
             field_confidences.append(gemini_conf)
-            reasons.append(f"{field}: filled by Gemini")
+            if field in CRITICAL_FIELDS:
+                # There's no parser value to cross-check this against, so this is
+                # Gemini's word alone for a critical field (e.g. tarikh_nikah).
+                # LLMs are prone to reporting high confidence for a fabricated-but-
+                # plausible value, so don't rely on gemini_conf to catch this --
+                # force review unconditionally rather than trust the model's own
+                # confidence about its own unverified guess.
+                reasons.append(f"{field}: filled by Gemini with no parser corroboration; review required")
+            else:
+                reasons.append(f"{field}: filled by Gemini")
             continue
 
         if _norm(parser_value) == _norm(gemini_value):
@@ -113,8 +122,12 @@ def merge_parser_and_gemini(
         layout_confidence=layout_confidence,
     )
 
-    # Never allow OK when a critical parser/Gemini disagreement remains.
-    if any("disagreement" in reason or "low Gemini confidence" in reason for reason in merged.review_reason):
+    # Never allow OK when a critical parser/Gemini disagreement remains, or when a
+    # critical field's only source is an uncorroborated Gemini guess.
+    if any(
+        "disagreement" in reason or "low Gemini confidence" in reason or "no parser corroboration" in reason
+        for reason in merged.review_reason
+    ):
         validated.status_review = "REVIEW"
         validated.review_reason = _dedupe(list(validated.review_reason or []) + merged.review_reason)
 

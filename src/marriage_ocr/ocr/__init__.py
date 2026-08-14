@@ -8,11 +8,13 @@ from pathlib import Path
 import platform
 from statistics import mean
 import sys
+import time
 from typing import Any, Mapping, Sequence
 
 import cv2
 
 from marriage_ocr.models import OcrLine, OcrResult
+from marriage_ocr.typed.vision import TRANSIENT_VISION_EXCEPTIONS
 
 
 class OcrEngine(ABC):
@@ -132,6 +134,12 @@ class GoogleVisionOcrEngine(OcrEngine):
 
         self._vision = vision
         self._language_hints = list(engine_config.get("language_hints", ["ms", "en"]))
+        self._api_attempts = int(engine_config.get("api_attempts", 3))
+        self._initial_delay_seconds = float(engine_config.get("initial_delay_seconds", 1.0))
+        self._backoff_multiplier = float(engine_config.get("backoff_multiplier", 2.0))
+        self._request_timeout_seconds = float(engine_config.get("request_timeout_seconds", 60.0))
+        if self._api_attempts < 1:
+            raise ValueError("api_attempts must be at least 1")
 
         try:
             self._client = vision.ImageAnnotatorClient()
@@ -147,15 +155,36 @@ class GoogleVisionOcrEngine(OcrEngine):
         image = self._vision.Image(content=content)
         image_context = self._vision.ImageContext(language_hints=self._language_hints)
 
-        response = self._client.document_text_detection(
-            image=image,
-            image_context=image_context,
-        )
+        response = self._call_with_retry(image=image, image_context=image_context)
 
         if response.error.message:
             raise RuntimeError(f"Google Vision OCR failed for {path.name}: {response.error.message}")
 
         return _google_vision_annotation_to_word_result(response.full_text_annotation)
+
+    def _call_with_retry(self, *, image: object, image_context: object) -> object:
+        """Retry a single Vision call with exponential backoff on transient errors.
+
+        A page that hits a transient 429/503/timeout used to raise immediately
+        and, at the page loop in pipeline.py, drop every record on that page.
+        At 1M-record scale with many parallel workers hitting Vision quotas,
+        transient errors are routine, not rare -- the typed-forms pipeline
+        (typed/vision.py) already retries for exactly this reason.
+        """
+        delay = self._initial_delay_seconds
+        for attempt in range(1, self._api_attempts + 1):
+            try:
+                return self._client.document_text_detection(
+                    image=image,
+                    image_context=image_context,
+                    timeout=self._request_timeout_seconds,
+                )
+            except TRANSIENT_VISION_EXCEPTIONS:
+                if attempt == self._api_attempts:
+                    raise
+                time.sleep(delay)
+                delay *= self._backoff_multiplier
+        raise AssertionError("Vision retry loop exhausted unexpectedly")
 
 
 def build_ocr_engine(config: Mapping[str, Any]) -> OcrEngine:
@@ -228,6 +257,7 @@ def run_ocr_on_page_layout(
 
     page_result = engine.read_image(page_image_path)
     page_words = [line for line in page_result.lines if line.bbox is not None and line.text.strip()]
+    page_words = _deduplicate_words(page_words)
 
     outputs: list[RecordOcrOutput] = []
     for record_crop, record_layout in zip(records, layout.records, strict=True):
@@ -394,6 +424,50 @@ def _words_to_ocr_result(words: Sequence[OcrLine]) -> OcrResult:
         lines=output_lines,
         average_confidence=mean([line.confidence for line in output_lines]) if output_lines else 0.0,
     )
+
+
+def _deduplicate_words(words: Sequence[OcrLine]) -> list[OcrLine]:
+    """Drop near-identical duplicate word detections before cell assignment.
+
+    Google Vision's document_text_detection can occasionally emit the same
+    physical word twice, in two overlapping paragraph/block groupings (most
+    often on skewed or high-DPI scans). Nothing downstream (_assign_words_to_box,
+    _words_to_ocr_result) deduplicates by text or position, so a duplicate word
+    here becomes duplicated text in the final cell result -- e.g. a real
+    "KAWASAN ICG. SG. KAYU ARA" cell becoming "KAWASAN KAWASAN ICG ICG . . SG
+    SG ... KAYU ARA" once both copies get word-joined together.
+    """
+    deduped: list[OcrLine] = []
+    for word in words:
+        if word.bbox is None:
+            deduped.append(word)
+            continue
+        is_duplicate = False
+        for kept in deduped:
+            if kept.bbox is None:
+                continue
+            if kept.text.strip().upper() != word.text.strip().upper():
+                continue
+            if _bbox_iou(word.bbox, kept.bbox) >= 0.5:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            deduped.append(word)
+    return deduped
+
+
+def _bbox_iou(a: Sequence[float], b: Sequence[float]) -> float:
+    left = max(float(a[0]), float(b[0]))
+    top = max(float(a[1]), float(b[1]))
+    right = min(float(a[2]), float(b[2]))
+    bottom = min(float(a[3]), float(b[3]))
+    if right <= left or bottom <= top:
+        return 0.0
+    intersection = (right - left) * (bottom - top)
+    area_a = max(1.0, (float(a[2]) - float(a[0])) * (float(a[3]) - float(a[1])))
+    area_b = max(1.0, (float(b[2]) - float(b[0])) * (float(b[3]) - float(b[1])))
+    union = area_a + area_b - intersection
+    return intersection / union if union > 0 else 0.0
 
 
 def _bbox_overlap_ratio(a: Sequence[float], b: Sequence[float]) -> float:

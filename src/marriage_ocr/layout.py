@@ -525,12 +525,15 @@ def _select_record_starts(
         if starts:
             return starts
 
+    # Same minimum gap _detect_record_boxes enforces when turning starts into
+    # boxes (see _optimize_record_starts for why these must match).
+    min_gap = max(30, min_record_height // 2)
     starts: list[int] = []
     for marker, candidates in zip(marker_boxes, candidates_per_marker, strict=True):
         strong_candidates = [candidate for candidate in candidates if candidate in candidate_map]
         start = strong_candidates[-1] if strong_candidates else candidates[-1]
-        if starts and start <= starts[-1] + 20:
-            start = max(starts[-1] + max(20, min_record_height // 2), start)
+        if starts and start <= starts[-1] + min_gap:
+            start = max(starts[-1] + min_gap, start)
         starts.append(start)
 
     return starts
@@ -547,6 +550,13 @@ def _optimize_record_starts(
     expected_height = table_box.height / max(1, len(marker_boxes))
     allowed_max = max(max_record_height * 1.5, expected_height * 1.25)
     target_offset = 20
+    # Must match _detect_record_boxes' own minimum-height filter exactly: if this
+    # optimizer accepts a gap that filter would later reject, the record silently
+    # vanishes from the output entirely -- no box, no marker, no review flag, the
+    # whole marriage entry just disappears. This bug was real and reproducible: 3
+    # markers in, only 2 boxes out, because "+20" here was looser than the "+40"
+    # (for default min_record_height=80) enforced downstream.
+    min_gap = max(30, min_record_height // 2)
     best_cost: float | None = None
     best_sequence: list[int] | None = None
 
@@ -554,7 +564,7 @@ def _optimize_record_starts(
         starts = list(sequence)
         if any(starts[index] >= marker_boxes[index].y for index in range(len(starts))):
             continue
-        if any(starts[index] <= starts[index - 1] + 20 for index in range(1, len(starts))):
+        if any(starts[index] <= starts[index - 1] + min_gap for index in range(1, len(starts))):
             continue
 
         ends = starts[1:] + [table_box.bottom]

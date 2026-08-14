@@ -1,12 +1,17 @@
+import threading
+import time
 from pathlib import Path
 import csv
 
+import pytest
 from openpyxl import load_workbook
 
+from marriage_ocr import exporter as exporter_module
 from marriage_ocr.exporter import (
     PUBLIC_CSV_COLUMNS,
     PUBLIC_XLSX_COLUMNS,
     XLSX_COLUMNS,
+    _atomic_write_bytes,
     export_records_to_csv,
     export_records_to_xlsx,
     record_from_export_dict,
@@ -99,6 +104,73 @@ def test_exporter_skips_duplicates_on_rerun(tmp_path: Path) -> None:
     assert second.written_count == 0
     assert second.skipped_duplicates == 1
     assert worksheet.max_row == 2
+
+
+def test_concurrent_csv_exports_do_not_lose_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: export_records_to_csv used to read-merge-write with no
+    locking, so two workers exporting into the same shared output path at
+    once could race -- the second worker reads the file before the first
+    worker's write lands, then writes back its own merge, silently
+    discarding the first worker's newly-appended row. Real scenario: two
+    Celery workers finishing pages of the same document and both appending
+    to one export file around the same time.
+
+    _timestamp_now is patched to sleep, widening the race window
+    deterministically instead of relying on incidental thread timing.
+    """
+    output_path = tmp_path / "records.csv"
+    record_a = _make_record(source_record="record_A", bil="1")
+    record_b = _make_record(source_record="record_B", bil="2")
+
+    original_timestamp_now = exporter_module._timestamp_now
+
+    def slow_timestamp_now() -> str:
+        time.sleep(0.05)
+        return original_timestamp_now()
+
+    monkeypatch.setattr(exporter_module, "_timestamp_now", slow_timestamp_now)
+
+    errors: list[Exception] = []
+
+    def run(record: ExtractedRecord) -> None:
+        try:
+            export_records_to_csv([record], output_path, EXPORT_CONFIG)
+        except Exception as exc:  # pragma: no cover - surfaced via errors list
+            errors.append(exc)
+
+    first = threading.Thread(target=run, args=(record_a,))
+    first.start()
+    time.sleep(0.01)  # let the first worker start its (slow) critical section
+    second = threading.Thread(target=run, args=(record_b,))
+    second.start()
+    first.join()
+    second.join()
+
+    assert not errors
+    with output_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert {row["Bil"] for row in rows} == {"1", "2"}
+
+
+def test_atomic_write_bytes_preserves_original_file_on_failure(tmp_path: Path) -> None:
+    """Regression: exporter writes used to go directly to the real output
+    path. A crash mid-write (OOM, Celery hard timeout, disk full) truncated
+    or corrupted the file, destroying every previously accumulated row, not
+    just the new batch. _atomic_write_bytes must leave the original file
+    untouched -- and leave no stray temp file behind -- when write_fn fails.
+    """
+    output_path = tmp_path / "records.csv"
+    output_path.write_text("original", encoding="utf-8")
+
+    def failing_write(path: Path) -> None:
+        Path(path).write_text("partial", encoding="utf-8")
+        raise RuntimeError("simulated crash mid-write")
+
+    with pytest.raises(RuntimeError):
+        _atomic_write_bytes(output_path, failing_write)
+
+    assert output_path.read_text(encoding="utf-8") == "original"
+    assert list(tmp_path.glob(f".{output_path.name}.*.tmp")) == []
 
 
 def test_exporter_reset_output_replaces_existing_rows(tmp_path: Path) -> None:

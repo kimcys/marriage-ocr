@@ -502,3 +502,54 @@ def test_process_command_prints_refinement_summary(monkeypatch, tmp_path: Path) 
 
     assert result.exit_code == 0
     assert "Refinement retry OCR calls: 4" in result.stdout
+
+
+def test_process_command_exits_nonzero_when_pages_failed(monkeypatch, tmp_path: Path) -> None:
+    # Regression: process_input no longer crashes when a page fails (it skips
+    # that page and continues), but a caller driving this CLI as a subprocess
+    # -- e.g. marriage-be's job executor -- decides success/failure purely from
+    # the exit code. Without this, a partial failure would exit 0 and silently
+    # report success despite missing pages' data.
+    input_path = tmp_path / "input.pdf"
+    input_path.write_bytes(b"pdf")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "marriage_ocr.cli._load_command_runtime",
+        lambda command_name, config_path: (
+            {"debug": {"retain_artifacts": False}, "ocr": {"engine": "fake"}},
+            SimpleNamespace(data={}, env_file=None),
+            SimpleNamespace(log_path=tmp_path / "process.log"),
+        ),
+    )
+    monkeypatch.setattr(
+        "marriage_ocr.cli.process_input",
+        lambda **kwargs: pipeline.ProcessResult(
+            records=[],
+            total_pages=2,
+            total_detected_records=1,
+            total_parsed_records=1,
+            status_counts={"OK": 1},
+            output_path=tmp_path / "output.xlsx",
+            debug_path=tmp_path / "debug",
+            refinement_ocr_calls=0,
+            failed_pages=["source.pdf"],
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "process",
+            "--input",
+            str(input_path),
+            "--output",
+            str(tmp_path / "output.xlsx"),
+            "--config",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "1 page(s) failed" in result.stdout

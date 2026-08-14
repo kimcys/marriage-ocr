@@ -9,6 +9,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 from dotenv import load_dotenv
 
 from marriage_ocr.models import ExtractedRecord
@@ -99,9 +100,38 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+_pool: ConnectionPool | None = None
+
+
+def _get_pool() -> ConnectionPool:
+    """Lazily create the process-wide connection pool.
+
+    Every db_postgres function used to call psycopg.connect(...) directly,
+    opening a brand-new TCP connection (and a fresh auth handshake) for
+    every single call -- one per file plus one per record plus one per
+    status update. At 1M-record scale, run either by many parallel
+    batch_runner instances or by a single long-running process, that
+    reconnect churn adds real latency and risks exhausting the database's
+    max_connections. A pool reuses a small number of already-authenticated
+    connections across calls instead.
+    """
+    global _pool
+    if _pool is None:
+        conninfo = _build_conninfo()
+        dsn = conninfo.pop("conninfo", "")
+        max_size = int(os.getenv("DATABASE_POOL_MAX_SIZE", "10"))
+        _pool = ConnectionPool(
+            dsn,
+            kwargs={"row_factory": dict_row, **conninfo},
+            min_size=1,
+            max_size=max_size,
+            open=True,
+        )
+    return _pool
+
+
 def get_connection():
-    conninfo = _build_conninfo()
-    return psycopg.connect(row_factory=dict_row, **conninfo)
+    return _get_pool().connection()
 
 
 def init_db():
@@ -413,6 +443,29 @@ def insert_record(
 
     with get_connection() as conn:
         with conn.cursor() as cur:
+            # is_file_done()/mark_file_failed() are built so a file that
+            # failed partway (or was interrupted) gets reprocessed on the
+            # next run -- that's the whole point of tracking per-file status.
+            # But re-inserting a record that already exists hits the ON
+            # CONFLICT DO UPDATE path below, which used to unconditionally
+            # re-increment ok_records/review_records as if it were brand
+            # new. At 1M-record scale, where retries after a transient
+            # OCR/API failure are routine, batches.ok_records/review_records
+            # -- surfaced directly in reports_postgres.print_report() --
+            # would drift upward without bound on every retry. Look up the
+            # record's previous status first so counters only move for an
+            # actual insert or an actual status change.
+            cur.execute(
+                """
+                SELECT status
+                FROM records
+                WHERE source_file = %s AND source_page = %s AND source_record = %s
+                """,
+                (source_file, source_page, source_record),
+            )
+            existing = cur.fetchone()
+            previous_status = existing["status"] if existing else None
+
             cur.execute(
                 """
                 INSERT INTO records (
@@ -491,26 +544,24 @@ def insert_record(
                 ),
             )
 
-            if status == "OK":
-                cur.execute(
-                    """
-                    UPDATE batches
-                    SET ok_records = ok_records + 1
-                    WHERE id = %s
-                    """,
-                    (batch_id,),
-                )
-            else:
-                cur.execute(
-                    """
-                    UPDATE batches
-                    SET review_records = review_records + 1
-                    WHERE id = %s
-                    """,
-                    (batch_id,),
-                )
+            if previous_status != status:
+                if previous_status is not None:
+                    _adjust_batch_status_bucket(cur, batch_id, previous_status, delta=-1)
+                _adjust_batch_status_bucket(cur, batch_id, status, delta=1)
 
         conn.commit()
+
+
+def _adjust_batch_status_bucket(cur, batch_id: int, status: str, *, delta: int) -> None:
+    column = "ok_records" if status == "OK" else "review_records"
+    cur.execute(
+        f"""
+        UPDATE batches
+        SET {column} = {column} + %s
+        WHERE id = %s
+        """,
+        (delta, batch_id),
+    )
 
 
 def _coerce_record_number(value: Any, *, default: int) -> int:

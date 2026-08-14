@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from marriage_ocr.models import ExtractedRecord, OcrResult
 from marriage_ocr.refinement.text_corrections import (
+    is_suspicious_ic,
     is_suspicious_name,
     is_valid_date,
     is_valid_malaysian_ic,
@@ -65,6 +66,13 @@ def validate_record(
     if not husband_ic_valid and not wife_ic_valid:
         critical = True
         reasons.append("missing both IC values")
+
+    if is_suspicious_ic(validated.ic_lama_suami) or is_suspicious_ic(validated.ic_baru_suami):
+        confidence -= 0.15
+        reasons.append("suspicious husband IC (implausible digits)")
+    if is_suspicious_ic(validated.ic_lama_isteri) or is_suspicious_ic(validated.ic_baru_isteri):
+        confidence -= 0.15
+        reasons.append("suspicious wife IC (implausible digits)")
 
     if not _age_valid(validated.umur_suami, validation_config):
         confidence -= 0.10

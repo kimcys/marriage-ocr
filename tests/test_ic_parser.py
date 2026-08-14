@@ -44,3 +44,18 @@ def test_ic_parser_supports_slash_prefixed_legacy_ids() -> None:
 
     assert parsed.ic_lama == "R/F119395"
     assert parsed.ic_baru is None
+
+
+def test_ic_parser_does_not_swallow_adjacent_age_digits() -> None:
+    # Regression: OCR sometimes reads a legacy IC and the following "NN TAHUN"
+    # age as one unbroken digit run with no separator (e.g. "A.0318172" then
+    # "29 TAHUN" -> "A03181729"). The IC must stop at 7 digits, not 8.
+    parsed = parse_identifiers("A.03181729")
+
+    assert parsed.ic_lama == "A0318172"
+
+
+def test_ic_parser_does_not_swallow_adjacent_age_digits_no_prefix() -> None:
+    parsed = parse_identifiers("03181729")
+
+    assert parsed.ic_lama == "0318172"

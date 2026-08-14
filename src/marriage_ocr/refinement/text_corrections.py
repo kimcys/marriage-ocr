@@ -180,13 +180,30 @@ def is_valid_malaysian_ic(value: str | None) -> bool:
     if len(compact) == 12 and compact.isdigit():
         return _is_valid_modern_ic_digits(compact)
 
-    if re.fullmatch(r"[A-Z]{1,3}(?:/[A-Z]{1,3})?\d{5,8}", str(value).upper()):
+    normalized = re.sub(r"[ .]", "", str(value).upper())
+    if re.fullmatch(r"[A-Z]{1,3}(?:/[A-Z]{1,3})?\d{5,8}", normalized):
         return True
 
-    if re.fullmatch(r"\d{5,8}", str(value).upper()):
+    if re.fullmatch(r"\d{5,8}", compact):
         return True
 
     return False
+
+
+def is_suspicious_ic(value: str | None) -> bool:
+    """Flag ICs that pass format validation but are implausible on their face.
+
+    Real regression: OCR read a handwritten "A.1111111" as "4.1111111" and our
+    line-splitting treated the leading "4." as a separate (garbage) token,
+    leaving a bare "1111111" -- 7 identical digits. That passes
+    is_valid_malaysian_ic's plain-digit format check with no red flag at all,
+    despite being extremely unlikely as a real ID. This doesn't try to recover
+    the correct value (that would be guessing); it only says "look at this."
+    """
+    if not value:
+        return False
+    digits = re.sub(r"[^0-9]", "", str(value))
+    return len(digits) >= 5 and len(set(digits)) == 1
 
 
 def is_valid_date(value: str | None) -> bool:

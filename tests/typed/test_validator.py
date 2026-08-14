@@ -47,6 +47,21 @@ def test_document_error_is_failed() -> None:
     assert status_for_result(summary, retry_count=0, document_error="Vision unavailable") is ProcessingStatus.FAILED
 
 
+def test_letter_prefixed_old_ic_is_accepted() -> None:
+    # Regression: the validator's old-IC check used to require a bare
+    # \d{7,8} fullmatch, rejecting the normal old-IC format (a letter prefix,
+    # e.g. "A1192345" or "R/F119395") even though normalize_ic can now
+    # actually produce that value.
+    record = _valid_record()
+    record.ic_lama_isteri = "A1192345"
+    summary = validate_record(record, {}, word_confidence_threshold=0.75, max_retry_fields=6)
+    assert "IC Isteri" not in summary.failed_fields
+
+    record.ic_lama_isteri = "R/F119395"
+    summary = validate_record(record, {}, word_confidence_threshold=0.75, max_retry_fields=6)
+    assert "IC Isteri" not in summary.failed_fields
+
+
 def test_multiline_age_raw_text_does_not_trigger_false_failure() -> None:
     record = _valid_record()
     raw_fields = {

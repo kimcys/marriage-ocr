@@ -119,7 +119,22 @@ def process(
             progress_callback=_print_progress,
         )
         console.print(f"Refinement retry OCR calls: {result.refinement_ocr_calls}")
+        if result.failed_pages:
+            # A page failing no longer crashes the whole run (see process_input's
+            # per-page error handling), but a caller driving this CLI as a
+            # subprocess -- e.g. marriage-be's job executor -- decides success or
+            # failure purely from the exit code. Exiting non-zero here, even
+            # though good pages' records were already exported, is what makes a
+            # partial failure show up as a FAILED (and therefore retryable) job
+            # instead of silently reporting success with missing data.
+            console.print(
+                f"[bold red]{len(result.failed_pages)} page(s) failed and were skipped: "
+                f"{result.failed_pages}[/bold red]"
+            )
+            raise typer.Exit(code=1)
     except typer.BadParameter:
+        raise
+    except typer.Exit:
         raise
     except Exception as error:
         _handle_command_error(

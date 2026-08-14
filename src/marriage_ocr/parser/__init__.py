@@ -52,9 +52,26 @@ COMPACT_DATE_PATTERN = re.compile(r"\b(\d{1,2})\s*[-./:,;]\s*(\d)(\d{2})\b")
 AGE_PATTERN = re.compile(r"(?:^|[\s/\-])([1-9]\d{1,2})\s*(?:TAHUN|TAHUH|TAHN|THN|THN\.|TAHUN\.)\b")
 NEW_IC_PATTERN = re.compile(r"\b(\d{6})[-\s./]?(\d{2})[-\s./]?(\d{4})\b")
 OLD_IC_PATTERN = re.compile(r"\b([A-Z])[-\s./]?(\d{5,8})\b")
-LEGACY_ID_PATTERN = re.compile(r"\b([A-Z]{1,3}(?:/[A-Z]{1,3})?)[-\s./]*(\d{5,8})\b")
-LEGACY_NUMERIC_IC_PATTERN = re.compile(r"\b(\d{5,8})\b")
-DETAIL_HINT_PATTERN = re.compile(r"(?:\b[ARWGS][-\s./]?\d{5,8}\b|\b\d{5,8}\b|\b\d{6}[-\s./]?\d{2}[-\s./]?\d{4}\b|\b\d{2,3}\s*(?:TAHUN|TAHUH|TAHN|THN)\b)")
+
+# Deliberately no trailing \b and capped at 7 digits (the real max legacy-IC
+# length seen in this register): an adjacent age/other digits concatenated
+# without a separator (e.g. OCR reading "A.0318172" + "29 TAHUN" as one
+# unbroken run "A03181729") must not get swallowed into the IC value.
+LEGACY_ID_PATTERN = re.compile(r"\b([A-Z]{1,3}(?:/[A-Z]{1,3})?)[-\s./]*(\d{5,7})")
+LEGACY_NUMERIC_IC_PATTERN = re.compile(r"\b(\d{5,7})")
+DETAIL_HINT_PATTERN = re.compile(
+    # No \b before the IC-prefix letter(s), and the separator allows more than one
+    # character: OCR frequently glues the letter onto the end of the preceding name
+    # word with no space (e.g. "MANSORA. 2360015" for "MANSOR" + "A. 2360015"), and
+    # without this the name/detail split point lands after that letter, silently
+    # dropping it from the IC value. Only a single plain letter is allowed (not up
+    # to 3): a wider run risks eating tail characters of the preceding name word
+    # itself (e.g. "MANSORA" -> "RA" + digits instead of "A" + digits). The
+    # "R/F"-style slash-prefixed legacy format is still matched in full, since the
+    # slash is an unambiguous marker that it's an IC prefix, not name characters.
+    r"(?:(?:[A-Z]{1,3}/[A-Z]{1,3}|[A-Z])[-\s./]*\d{5,8}\b|\b\d{5,8}\b|\b\d{6}[-\s./]?\d{2}[-\s./]?\d{4}\b|"
+    r"\b\d{2,3}\s*(?:TAHUN|TAHUH|TAHN|THN)\b)"
+)
 NUMBERING_PREFIX_PATTERN = re.compile(r"^\s*(?:[\[(]?\d+[\])\-.]?|[①②③④⑤⑥⑦⑧⑨])\s*")
 NUMBERING_SPLIT_PATTERN = re.compile(r"(?:^|\n|\s)(?:[\[(]?[12][\])\-.]|[①②])\s*")
 BIL_WITH_YEAR_PATTERN = re.compile(r"\b(\d{3,5})\s*[/\\|IL]\s*(\d{2,4})\b")
@@ -461,7 +478,13 @@ def _extract_spouse_people(lines: Sequence[str]) -> list[dict[str, object | None
         while index < len(lines):
             line = lines[index]
             if _is_detail_line(line):
-                detail_parts.append(line)
+                # Use the detail portion of the split, not the raw line: a detail
+                # line can still carry a leading name/alias fragment (e.g. an "@"
+                # alias marker glued to a repeated surname glued to the IC-prefix
+                # letter), and using the raw line would drag that glued letter
+                # back out of the IC value.
+                split = _split_name_detail_line(line)
+                detail_parts.append(str(split["detail"]) if split["detail"] else line)
                 index += 1
                 continue
             break
@@ -486,7 +509,14 @@ def _is_detail_line(line: str) -> bool:
 
 def _is_ocr_placeholder(line: str) -> bool:
     normalized = _normalize_text(line)
-    return "MOCK_OCR" in normalized or ("[" in normalized and "]" in normalized and ":" in normalized)
+    if "MOCK_OCR" in normalized or ("[" in normalized and "]" in normalized and ":" in normalized):
+        return True
+    # A line of pure punctuation (e.g. a lone "-" marking "no value") carries no
+    # information but still counts as a "line" in the strict name/detail/name/
+    # detail sequence _extract_spouse_people expects -- left in, it desyncs that
+    # sequence and can silently drop the second spouse's real name/IC/age lines
+    # entirely. Safe to drop: it has nothing worth keeping either way.
+    return bool(normalized) and not any(character.isalnum() for character in normalized)
 
 
 def _split_name_detail_line(line: str) -> dict[str, str | None]:

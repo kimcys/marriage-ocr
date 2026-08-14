@@ -1,6 +1,7 @@
 from marriage_ocr.models import OcrResult
 from marriage_ocr.parser import parse_record_ocr
 from marriage_ocr.validation import (
+    is_suspicious_ic,
     is_suspicious_name,
     is_valid_date,
     is_valid_malaysian_ic,
@@ -98,3 +99,26 @@ def test_validation_helpers_cover_ic_date_and_name_rules() -> None:
     assert is_valid_date("31-02-1994") is False
     assert is_suspicious_name("SITI B1NTI ALI") is True
     assert is_suspicious_name("SITI BINTI ALI") is False
+    assert is_suspicious_ic("1111111") is True
+    assert is_suspicious_ic("0000000") is True
+    assert is_suspicious_ic("A1192345") is False
+    assert is_suspicious_ic("1234567") is False
+    assert is_suspicious_ic(None) is False
+
+
+def test_validation_flags_suspicious_all_identical_digit_ic() -> None:
+    # Regression: real OCR read a handwritten "A.1111111" as "4.1111111", and
+    # line-splitting discarded the leading "4." as a garbage token, leaving a
+    # bare "1111111" -- 7 identical digits. That passes is_valid_malaysian_ic's
+    # plain-digit format check with no red flag, so it needs its own check.
+    cell_results = {
+        "bil": OcrResult(text="1", average_confidence=0.9),
+        "suami_isteri": OcrResult(text="ZABA BIN MOHD ZAIN\nA.1471242-24 TAHUN.", average_confidence=0.9),
+    }
+    parsed = parse_record_ocr(cell_results, source_record="record_000")
+    parsed.ic_lama_isteri = "1111111"
+
+    validated = validate_record(parsed, cell_results, VALIDATION_CONFIG, layout_confidence=1.0)
+
+    assert "suspicious wife IC (implausible digits)" in validated.review_reason
+    assert validated.status_review != "OK"

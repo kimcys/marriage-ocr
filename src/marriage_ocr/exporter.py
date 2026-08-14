@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import csv
+import fcntl
+import os
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any, Iterable, Mapping, Sequence
 
 from openpyxl import Workbook, load_workbook
@@ -134,6 +138,57 @@ EXPORT_COLUMN_TO_FIELD = {
 }
 
 
+@contextlib.contextmanager
+def _export_lock(output_path: Path):
+    """Serialize concurrent read-merge-write export cycles against one output file.
+
+    Multiple Celery workers can export into the same shared output path at
+    once (e.g. several pages of the same document, or several documents
+    configured to append into one workbook). Without this lock, each worker
+    reads the file, merges its own new rows in memory, and writes the whole
+    file back -- a classic read-merge-write race where the last writer wins
+    and silently discards every other worker's newly-appended rows. A single
+    blocking OS advisory lock on a sibling ".lock" file makes the whole
+    read-merge-write cycle atomic across processes on the same host.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = output_path.with_name(f".{output_path.name}.lock")
+    with open(lock_path, "w") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_bytes(output_path: Path, write_fn) -> None:
+    """Write via a same-directory temp file + fsync + rename, never the real path.
+
+    A worker killed mid-write (OOM, Celery hard timeout, disk full) must
+    never leave the shared export file truncated or partially written --
+    that would destroy every row previously accumulated by other workers,
+    not just the new batch. write_fn(path) is called with the temp path and
+    must write the complete file contents there.
+    """
+    tmp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            delete=False,
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+        ) as handle:
+            tmp_path = Path(handle.name)
+        write_fn(tmp_path)
+        with open(tmp_path, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, output_path)
+    except Exception:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise
+
+
 @dataclass(frozen=True)
 class ExportSummary:
     written_count: int
@@ -157,37 +212,41 @@ def export_records_to_xlsx(
     sheet_columns = [*visible_columns, *hidden_columns]
 
     record_list = list(records)
-    workbook, worksheet = _load_or_create_workbook(
-        output_path=output_path,
-        reset_output=reset_output,
-        append_mode=append_mode,
-        sheet_name=sheet_name,
-    )
-    _ensure_headers(worksheet, sheet_columns, visible_columns)
-    _hide_columns(worksheet, visible_columns, hidden_columns)
 
-    existing_keys = _read_existing_keys(worksheet) if dedupe_enabled else set()
-    now = _timestamp_now()
-    written_count = 0
-    skipped_duplicates = 0
+    with _export_lock(output_path):
+        workbook, worksheet = _load_or_create_workbook(
+            output_path=output_path,
+            reset_output=reset_output,
+            append_mode=append_mode,
+            sheet_name=sheet_name,
+        )
+        _ensure_headers(worksheet, sheet_columns, visible_columns)
+        _hide_columns(worksheet, visible_columns, hidden_columns)
 
-    for record in record_list:
-        dedupe_key = _record_dedupe_key(record)
-        if dedupe_enabled and dedupe_key is not None and dedupe_key in existing_keys:
-            skipped_duplicates += 1
-            continue
+        existing_keys = _read_existing_keys(worksheet) if dedupe_enabled else set()
+        now = _timestamp_now()
+        written_count = 0
+        skipped_duplicates = 0
 
-        export_row = record_to_export_dict(record, timestamp=now, columns=sheet_columns)
-        worksheet.append([export_row[column] for column in sheet_columns])
-        written_count += 1
-        if dedupe_key is not None:
-            existing_keys.add(dedupe_key)
+        for record in record_list:
+            dedupe_key = _record_dedupe_key(record)
+            if dedupe_enabled and dedupe_key is not None and dedupe_key in existing_keys:
+                skipped_duplicates += 1
+                continue
 
-    workbook.save(output_path)
+            export_row = record_to_export_dict(record, timestamp=now, columns=sheet_columns)
+            worksheet.append([export_row[column] for column in sheet_columns])
+            written_count += 1
+            if dedupe_key is not None:
+                existing_keys.add(dedupe_key)
+
+        total_rows = max(0, worksheet.max_row - 1)
+        _atomic_write_bytes(output_path, workbook.save)
+
     return ExportSummary(
         written_count=written_count,
         skipped_duplicates=skipped_duplicates,
-        total_rows=max(0, worksheet.max_row - 1),
+        total_rows=total_rows,
         output_path=output_path,
     )
 
@@ -204,45 +263,50 @@ def export_records_to_csv(
     dedupe_enabled = bool(export_config.get("dedupe", True)) or skip_existing
 
     record_list = list(records)
-    existing_rows: list[dict[str, Any]] = []
-    existing_keys: set[tuple[str, ...]] = set()
 
-    if reset_output and output_path.exists():
-        output_path.unlink()
+    with _export_lock(output_path):
+        existing_rows: list[dict[str, Any]] = []
+        existing_keys: set[tuple[str, ...]] = set()
 
-    if output_path.exists() and append_mode:
-        with output_path.open("r", encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
-                existing_rows.append({column: row.get(column) for column in PUBLIC_CSV_COLUMNS})
-                if dedupe_enabled:
-                    key = _csv_row_dedupe_key(row)
-                    if key is not None:
-                        existing_keys.add(key)
+        if reset_output and output_path.exists():
+            output_path.unlink()
 
-    now = _timestamp_now()
-    new_rows: list[dict[str, Any]] = []
-    written_count = 0
-    skipped_duplicates = 0
+        if output_path.exists() and append_mode:
+            with output_path.open("r", encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                for row in reader:
+                    existing_rows.append({column: row.get(column) for column in PUBLIC_CSV_COLUMNS})
+                    if dedupe_enabled:
+                        key = _csv_row_dedupe_key(row)
+                        if key is not None:
+                            existing_keys.add(key)
 
-    for record in record_list:
-        export_row = record_to_export_dict(record, timestamp=now, columns=PUBLIC_CSV_COLUMNS)
-        dedupe_key = _csv_record_dedupe_key(record)
-        if dedupe_enabled and dedupe_key is not None and dedupe_key in existing_keys:
-            skipped_duplicates += 1
-            continue
-        new_rows.append(export_row)
-        written_count += 1
-        if dedupe_key is not None:
-            existing_keys.add(dedupe_key)
+        now = _timestamp_now()
+        new_rows: list[dict[str, Any]] = []
+        written_count = 0
+        skipped_duplicates = 0
 
-    rows_to_write = [*existing_rows, *new_rows] if append_mode and output_path.exists() else new_rows
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=PUBLIC_CSV_COLUMNS)
-        writer.writeheader()
-        for row in rows_to_write:
-            writer.writerow({column: row.get(column) for column in PUBLIC_CSV_COLUMNS})
+        for record in record_list:
+            export_row = record_to_export_dict(record, timestamp=now, columns=PUBLIC_CSV_COLUMNS)
+            dedupe_key = _csv_record_dedupe_key(record)
+            if dedupe_enabled and dedupe_key is not None and dedupe_key in existing_keys:
+                skipped_duplicates += 1
+                continue
+            new_rows.append(export_row)
+            written_count += 1
+            if dedupe_key is not None:
+                existing_keys.add(dedupe_key)
+
+        rows_to_write = [*existing_rows, *new_rows] if append_mode and output_path.exists() else new_rows
+
+        def _write_csv(path: Path) -> None:
+            with open(path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=PUBLIC_CSV_COLUMNS)
+                writer.writeheader()
+                for row in rows_to_write:
+                    writer.writerow({column: row.get(column) for column in PUBLIC_CSV_COLUMNS})
+
+        _atomic_write_bytes(output_path, _write_csv)
 
     return ExportSummary(
         written_count=written_count,

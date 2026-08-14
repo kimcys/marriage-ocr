@@ -173,7 +173,7 @@ def test_validate_record_with_optional_gemini_disables_gemini_after_leaked_key()
     parsed_record = ExtractedRecord(
         bil="1",
         nama_suami="ALI BIN ABU",
-        ic_lama_suami="A.1234567",
+        ic_lama_suami="A1234567",
         umur_suami=30,
         nama_isteri="SITI BINTI ALI",
         ic_baru_isteri="900101-01-1234",
@@ -223,6 +223,80 @@ def test_validate_record_with_optional_gemini_disables_gemini_after_leaked_key()
     assert first.status_review == "REVIEW"
     assert second.status_review == "OK"
     assert any("Gemini disabled for the remainder of this run" in str(args[0]) for args, _ in logger.messages)
+
+
+def test_validate_record_with_optional_gemini_does_not_disable_run_on_rate_limit() -> None:
+    """Regression: a single transient 429/RESOURCE_EXHAUSTED used to be
+    lumped in with genuinely permanent errors (revoked key, no permission)
+    in _should_disable_gemini_for_run, permanently disabling Gemini for
+    every subsequent record in the run. GeminiRecordExtractor now retries
+    transient errors on its own (see gemini_extractor.py); by the time an
+    error reaches here, retrying already failed for *that* record, but a
+    rate-limit blip says nothing about whether the *next* record's call
+    will succeed. Gemini must stay enabled so later records still get a
+    chance at higher-accuracy extraction.
+    """
+    class FakeLogger:
+        def warning(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    calls = {"count": 0}
+
+    def failing_processor(*args, **kwargs):
+        calls["count"] += 1
+        raise RuntimeError("429 RESOURCE_EXHAUSTED. Quota exceeded, too many requests.")
+
+    parsed_record = ExtractedRecord(
+        bil="1",
+        nama_suami="ALI BIN ABU",
+        ic_lama_suami="A1234567",
+        umur_suami=30,
+        nama_isteri="SITI BINTI ALI",
+        ic_baru_isteri="900101-01-1234",
+        umur_isteri=28,
+        mas_kahwin="RM100",
+        mas_kahwin_raw="RM100",
+        nama_pendaftar="ABDUL",
+        alamat_pendaftar="KUALA LUMPUR",
+        nama_wali="AHMAD",
+        hubungan_wali="BAPA",
+        saksi_1="HASHIM",
+        saksi_2="RAHMAN",
+        tarikh_nikah="2024-01-01",
+    )
+    record_output = _FakeRecordOutput(
+        record_dir=Path("."),
+        cell_results={"bil": OcrResult(text="1", average_confidence=0.95)},
+    )
+    gemini_state: dict[str, bool] = {"disabled": False}
+
+    first = pipeline._validate_record_with_optional_gemini(
+        parsed_record=parsed_record,
+        record_output=record_output,
+        layout_confidence=1.0,
+        gemini_processor=failing_processor,
+        gemini_state=gemini_state,
+        validation_config={"ok_confidence_threshold": 0.85, "min_average_confidence": 0.5},
+        logger=FakeLogger(),
+        source_file="input.pdf",
+        source_page=1,
+    )
+    second = pipeline._validate_record_with_optional_gemini(
+        parsed_record=parsed_record,
+        record_output=record_output,
+        layout_confidence=1.0,
+        gemini_processor=failing_processor,
+        gemini_state=gemini_state,
+        validation_config={"ok_confidence_threshold": 0.85, "min_average_confidence": 0.5},
+        logger=FakeLogger(),
+        source_file="input.pdf",
+        source_page=1,
+    )
+
+    assert calls["count"] == 2
+    assert gemini_state["disabled"] is False
+    assert first.status_review == "REVIEW"
+    assert second.status_review == "REVIEW"
 
 
 def test_validate_record_with_optional_gemini_receives_refined_record() -> None:

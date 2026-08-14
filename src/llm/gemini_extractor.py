@@ -5,15 +5,20 @@ import json
 import mimetypes
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean
 from typing import Any, Mapping
 
+from google.genai import errors as genai_errors
+
 from marriage_ocr.models import ExtractedRecord, OcrResult
 
 
 LOGGER = logging.getLogger(__name__)
+
+TRANSIENT_GEMINI_HTTP_CODES = frozenset({429, 500, 502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -34,12 +39,26 @@ class GeminiRecordExtractor:
     plus the OCR cell text as hints and returns one strict JSON object.
     """
 
+    # Class-level fallbacks so tests that bypass __init__ via
+    # GeminiRecordExtractor.__new__(...) still get single-attempt behavior
+    # instead of an AttributeError.
+    _api_attempts = 1
+    _initial_delay_seconds = 0.0
+    _backoff_multiplier = 2.0
+    _request_timeout_seconds = 60.0
+
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         self.config = dict(config or {})
         self.model = str(self.config.get("model", "gemini-2.5-flash"))
         self.temperature = float(self.config.get("temperature", 0.0))
         self.max_output_tokens = int(self.config.get("max_output_tokens", 4096))
         self.save_raw_json = bool(self.config.get("save_raw_json", True))
+        self._api_attempts = int(self.config.get("api_attempts", 3))
+        self._initial_delay_seconds = float(self.config.get("initial_delay_seconds", 1.0))
+        self._backoff_multiplier = float(self.config.get("backoff_multiplier", 2.0))
+        self._request_timeout_seconds = float(self.config.get("request_timeout_seconds", 60.0))
+        if self._api_attempts < 1:
+            raise ValueError("api_attempts must be at least 1")
 
         try:
             from google import genai
@@ -80,17 +99,39 @@ class GeminiRecordExtractor:
         return self._payload_to_result(payload)
 
     def _generate_content(self, prompt: str, image_part: Any) -> Any:
+        """Call Gemini with retry-with-backoff on transient errors.
+
+        Without this, a single 429/RESOURCE_EXHAUSTED or 5xx propagated
+        straight to pipeline.py, which fell back to parser-only validation
+        for that record AND (previously) permanently disabled Gemini for
+        every subsequent record in the run -- see
+        pipeline.py::_should_disable_gemini_for_run. At 1M-record scale with
+        many parallel workers hitting the same Gemini quota, a transient
+        rate-limit response is the routine case, not the exception; retrying
+        the single call first, before falling back at all, keeps far more
+        records on the higher-accuracy Gemini path.
+        """
         config = self._types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=self.max_output_tokens,
             response_mime_type="application/json",
             response_schema=GEMINI_RECORD_SCHEMA,
+            http_options=self._types.HttpOptions(timeout=int(self._request_timeout_seconds * 1000)),
         )
-        return self._client.models.generate_content(
-            model=self.model,
-            contents=[prompt, image_part],
-            config=config,
-        )
+        delay = self._initial_delay_seconds
+        for attempt in range(1, self._api_attempts + 1):
+            try:
+                return self._client.models.generate_content(
+                    model=self.model,
+                    contents=[prompt, image_part],
+                    config=config,
+                )
+            except genai_errors.APIError as error:
+                if attempt == self._api_attempts or error.code not in TRANSIENT_GEMINI_HTTP_CODES:
+                    raise
+                time.sleep(delay)
+                delay *= self._backoff_multiplier
+        raise AssertionError("Gemini retry loop exhausted unexpectedly")
 
     def _extract_response_payload(self, response: Any) -> dict[str, Any]:
         parsed = getattr(response, "parsed", None)
@@ -130,6 +171,11 @@ Rules:
 - Preserve names as written only when the image truly supports the original spelling.
 - Common corrections: 4J/ITJ/14J -> HJ.; BIR/8IN -> BIN; BINT!/BINT1 -> BINTI; BAP9/B4PA -> BAPA.
 - Dates: put the original visible text in *_raw; normalize to YYYY-MM-DD only if clear.
+  Never guess a plausible-looking date when the handwriting is unclear or partially
+  illegible -- set the normalized date field to null and put whatever you can
+  actually make out in *_raw instead. A wrong date is worse than a missing one, and
+  a missing date field with no other parser evidence is always sent for human review,
+  so there is no benefit to guessing.
 - IC values: split old/new IC only when obvious; otherwise keep uncertain text in id_*_raw.
 - mas_kahwin should usually contain RM and a numeric amount when visible.
 - hubungan_wali should be a relationship such as BAPA, ABANG, ADIK-BERADIK, WALI HAKIM, etc.
@@ -153,6 +199,11 @@ Rules:
 - Preserve names as written, but normalize obvious OCR artifacts only when clear.
 - Common corrections: 4J/ITJ/14J -> HJ.; BIR/8IN -> BIN; BINT!/BINT1 -> BINTI; BAP9/B4PA -> BAPA.
 - Dates: put the original visible text in *_raw; normalize to YYYY-MM-DD only if clear.
+  Never guess a plausible-looking date when the handwriting is unclear or partially
+  illegible -- set the normalized date field to null and put whatever you can
+  actually make out in *_raw instead. A wrong date is worse than a missing one, and
+  a missing date field with no other parser evidence is always sent for human review,
+  so there is no benefit to guessing.
 - IC values: split old/new IC only when obvious; otherwise keep uncertain text in id_*_raw.
 - mas_kahwin should usually contain RM and a numeric amount when visible.
 - hubungan_wali should be a relationship such as BAPA, ABANG, ADIK-BERADIK, WALI HAKIM, etc.
