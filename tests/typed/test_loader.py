@@ -39,6 +39,17 @@ def test_render_typed_pdf_rejects_non_two_page_pdf(tmp_path: Path) -> None:
     pdf_path = tmp_path / "one-page.pdf"
     _write_pdf(pdf_path, 1)
 
-    with pytest.raises(ValueError, match="expected exactly 2 pages"):
+    with pytest.raises(ValueError, match=r"Expected exactly 2 page\(s\), found 1"):
         render_typed_pdf(pdf_path, tmp_path / "debug", dpi=300)
+
+
+def test_render_typed_pdf_accepts_custom_expected_page_count(tmp_path: Path) -> None:
+    # Legacy Cerai/Rujuk typed certs (Borang 9/Borang 5) are genuinely
+    # single-page, unlike Borang 4B/modern Cerai/Rujuk's 2 pages.
+    pdf_path = tmp_path / "legacy.pdf"
+    _write_pdf(pdf_path, 1)
+
+    pages = render_typed_pdf(pdf_path, tmp_path / "debug", dpi=300, expected_pages=1)
+
+    assert [page.page_number for page in pages] == [1]
 

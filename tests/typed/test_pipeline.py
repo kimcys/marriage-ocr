@@ -140,5 +140,5 @@ def test_pipeline_marks_failed_row_for_one_page_pdf(monkeypatch, tmp_path: Path)
 
     assert result.discovered_pdfs == 1
     assert result.records[0].processing_status is ProcessingStatus.FAILED
-    assert "expected exactly 2 pages" in result.records[0].error_message
+    assert "Expected exactly 2 page(s)" in result.records[0].error_message
 

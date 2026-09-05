@@ -13,7 +13,7 @@ from marriage_ocr.config import load_runtime_config
 from marriage_ocr.logging_config import get_logger
 from marriage_ocr.models import ExtractedRecord
 from marriage_ocr.typed.csv_writer import TypedCsvStore
-from marriage_ocr.typed.extractor import FIELD_OUTPUT_NAMES, extract_raw_fields
+from marriage_ocr.typed.extractor import extract_raw_fields
 from marriage_ocr.typed.loader import discover_typed_pdfs, render_typed_pdf
 from marriage_ocr.typed.models import (
     FieldDiagnostic,
@@ -28,7 +28,8 @@ from marriage_ocr.typed.models import (
 )
 from marriage_ocr.typed.normalizer import build_extracted_record
 from marriage_ocr.typed.retry import create_retry_crops, extract_retry_raw_fields, prefer_retry_value
-from marriage_ocr.typed.validator import RETRY_PRIORITY, status_for_result, validate_record
+from marriage_ocr.typed.template import TEMPLATES
+from marriage_ocr.typed.validator import status_for_result, validate_record
 from marriage_ocr.typed.vision import TypedVisionClient
 
 
@@ -122,7 +123,7 @@ def _process_retry_fields(
     source_file: str,
     source_stem: str,
     debug_dir: Path,
-    pages: tuple[RenderedPage, RenderedPage],
+    pages: tuple[RenderedPage, ...],
     raw_fields: dict[str, RawField],
     summary: ValidationSummary,
     client: TypedVisionClient,
@@ -130,6 +131,7 @@ def _process_retry_fields(
     min_age: int,
     max_age: int,
     max_retry_fields: int,
+    template_name: str = "borang_4b",
 ) -> tuple[dict[str, RawField], int, dict[str, object]]:
     retry_fields = tuple(summary.retry_fields[:max_retry_fields])
     if not retry_fields:
@@ -141,6 +143,7 @@ def _process_retry_fields(
         field_keys=retry_fields,
         retry_dir=debug_dir,
         padding_ratio=0.05,
+        template_name=template_name,
     )
     retry_results = extract_retry_raw_fields(retry_crops, client)
     retry_payload: dict[str, object] = {}
@@ -178,7 +181,7 @@ def _process_retry_fields(
                 },
             },
         )
-        original_record = build_extracted_record(updated_fields)
+        original_record = build_extracted_record(updated_fields, template_name=template_name)
         original_summary = validate_record(
             original_record,
             updated_fields,
@@ -186,10 +189,11 @@ def _process_retry_fields(
             min_age=min_age,
             max_age=max_age,
             max_retry_fields=max_retry_fields,
+            template_name=template_name,
         )
         retry_candidate_fields = dict(updated_fields)
         retry_candidate_fields[crop.field_key] = retry_field
-        retry_record = build_extracted_record(retry_candidate_fields)
+        retry_record = build_extracted_record(retry_candidate_fields, template_name=template_name)
         retry_summary = validate_record(
             retry_record,
             retry_candidate_fields,
@@ -197,6 +201,7 @@ def _process_retry_fields(
             min_age=min_age,
             max_age=max_age,
             max_retry_fields=max_retry_fields,
+            template_name=template_name,
         )
         current_valid = original_summary.diagnostics[crop.field_key].valid
         retry_valid = retry_summary.diagnostics[crop.field_key].valid
@@ -222,16 +227,24 @@ def _process_single_pdf(
     typed_cfg: Mapping[str, object],
     retry_cfg: Mapping[str, object],
     validation_cfg: Mapping[str, object],
-    pages: tuple[RenderedPage, RenderedPage] | None = None,
+    pages: tuple[RenderedPage, ...] | None = None,
     ocr_results_by_page: Mapping[tuple[str, int], PageOcrResult] | None = None,
+    template_name: str = "borang_4b",
+    record_type: str = "NIKAH",
 ) -> TypedDocumentResult:
     source_file = pdf.name
     source_stem = pdf.stem
     document_debug_dir = debug_path / source_stem
     document_debug_dir.mkdir(parents=True, exist_ok=True)
+    expected_pages = int(TEMPLATES[template_name]["pages"])
     try:
         if pages is None:
-            pages = render_typed_pdf(pdf, document_debug_dir, dpi=int(typed_cfg.get("pdf_dpi", 300)))
+            pages = render_typed_pdf(
+                pdf,
+                document_debug_dir,
+                dpi=int(typed_cfg.get("pdf_dpi", 300)),
+                expected_pages=expected_pages,
+            )
     except Exception as error:
         return _record_failure(source_file, str(error), debug_dir=document_debug_dir)
 
@@ -259,13 +272,17 @@ def _process_single_pdf(
         )
 
     _write_json(document_debug_dir / "full_page_vision.json", [asdict(result) for result in page_results])
-    raw_fields = extract_raw_fields(page_results, boundary_tolerance=float(typed_cfg.get("region_boundary_tolerance", 0.01)))
+    raw_fields = extract_raw_fields(
+        page_results,
+        boundary_tolerance=float(typed_cfg.get("region_boundary_tolerance", 0.01)),
+        template_name=template_name,
+    )
     _write_json(document_debug_dir / "extracted_raw.json", {key: asdict(field) for key, field in raw_fields.items()})
 
     for page in pages:
         _write_region_overlay(page, raw_fields, document_debug_dir / f"page_{page.page_number}_regions.png")
 
-    record = build_extracted_record(raw_fields)
+    record = build_extracted_record(raw_fields, template_name=template_name)
     summary = validate_record(
         record,
         raw_fields,
@@ -273,6 +290,7 @@ def _process_single_pdf(
         min_age=int(validation_cfg.get("min_age", 16)),
         max_age=int(validation_cfg.get("max_age", 120)),
         max_retry_fields=int(retry_cfg.get("max_fields_per_pdf", 6)),
+        template_name=template_name,
     )
     _write_json(document_debug_dir / "validation.json", _serialise_summary(summary))
 
@@ -290,11 +308,12 @@ def _process_single_pdf(
                 min_age=int(validation_cfg.get("min_age", 16)),
                 max_age=int(validation_cfg.get("max_age", 120)),
                 max_retry_fields=int(retry_cfg.get("max_fields_per_pdf", 6)),
+                template_name=template_name,
             )
         except Exception as error:
             return _record_failure(source_file, str(error), debug_dir=document_debug_dir)
         raw_fields = retry_updated_fields
-        record = build_extracted_record(raw_fields)
+        record = build_extracted_record(raw_fields, template_name=template_name)
         summary = validate_record(
             record,
             raw_fields,
@@ -302,6 +321,7 @@ def _process_single_pdf(
             min_age=int(validation_cfg.get("min_age", 16)),
             max_age=int(validation_cfg.get("max_age", 120)),
             max_retry_fields=int(retry_cfg.get("max_fields_per_pdf", 6)),
+            template_name=template_name,
         )
         _write_json(document_debug_dir / "extracted_raw.json", {key: asdict(field) for key, field in raw_fields.items()})
         _write_json(document_debug_dir / "validation.json", _serialise_summary(summary))
@@ -309,6 +329,7 @@ def _process_single_pdf(
         retry_count = 0
 
     status = status_for_result(summary, retry_count=retry_count)
+    record.record_type = record_type
     record.source_file = source_file
     record.source_page = 1
     record.source_record = source_stem
@@ -331,9 +352,12 @@ def _process_micro_batch(
     typed_cfg: Mapping[str, object],
     retry_cfg: Mapping[str, object],
     validation_cfg: Mapping[str, object],
+    template_name: str = "borang_4b",
+    record_type: str = "NIKAH",
 ) -> tuple[TypedDocumentResult, ...]:
     render_workers = max(1, int(typed_cfg.get("render_workers", 4)))
-    rendered: dict[str, tuple[RenderedPage, RenderedPage] | None] = {}
+    expected_pages = int(TEMPLATES[template_name]["pages"])
+    rendered: dict[str, tuple[RenderedPage, ...] | None] = {}
     errors: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=render_workers) as executor:
         futures = {
@@ -342,6 +366,7 @@ def _process_micro_batch(
                 pdf,
                 debug_path / pdf.stem,
                 dpi=int(typed_cfg.get("pdf_dpi", 300)),
+                expected_pages=expected_pages,
             )
             for pdf in pdfs
         }
@@ -394,6 +419,8 @@ def _process_micro_batch(
                     validation_cfg=validation_cfg,
                     pages=pages,
                     ocr_results_by_page=ocr_results_by_page,
+                    template_name=template_name,
+                    record_type=record_type,
                 )
             )
         except Exception as error:
@@ -416,6 +443,8 @@ def process_typed_input(
     retry_cfg = dict(typed_cfg.get("retry", {}))
     validation_cfg = dict(typed_cfg.get("validation", {}))
     vision_cfg = dict(loaded.data.get("ocr", {}).get("google_vision", {}))
+    template_name = str(typed_cfg.get("template", "borang_4b"))
+    record_type = str(loaded.data.get("record_type", "NIKAH")).upper()
     pdfs = discover_typed_pdfs(input_path)
     store = TypedCsvStore.load(
         output_path,
@@ -442,6 +471,8 @@ def process_typed_input(
             typed_cfg=typed_cfg,
             retry_cfg=retry_cfg,
             validation_cfg=validation_cfg,
+            template_name=template_name,
+            record_type=record_type,
         )
         for result in batch_results:
             store.upsert(result)

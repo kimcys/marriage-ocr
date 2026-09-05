@@ -10,10 +10,10 @@ from marriage_ocr.typed.models import (
     Region,
     TemplateTransform,
 )
-from marriage_ocr.typed.template import apply_transform, estimate_transform, get_region
+from marriage_ocr.typed.template import TEMPLATES, apply_transform, estimate_transform, get_region
 
 
-FIELD_OUTPUT_NAMES = {
+FIELD_OUTPUT_NAMES_BORANG_4B = {
     "bil": "Bil",
     "nama_suami": "Nama Suami",
     "id_suami": "IC Suami",
@@ -29,6 +29,28 @@ FIELD_OUTPUT_NAMES = {
     "saksi_1": "Saksi 1",
     "saksi_2": "Saksi 2",
     "tarikh_nikah": "Tarikh Nikah",
+}
+
+# Backward-compatible alias -- pre-record_type module surface.
+FIELD_OUTPUT_NAMES = FIELD_OUTPUT_NAMES_BORANG_4B
+
+
+def _auto_field_output_names(template_name: str) -> dict[str, str]:
+    """Title-case a field_key into a display name, e.g. "tarikh_lahir_suami"
+    -> "Tarikh Lahir Suami" -- same convention retry.py's
+    extract_retry_raw_fields already uses as its own fallback, just applied
+    up front here instead of only for retry crops. Avoids hand-authoring
+    ~30 names per new template when the auto-derived name is already right.
+    """
+    return {key: key.replace("_", " ").title() for key in TEMPLATES[template_name]["regions"]}
+
+
+FIELD_OUTPUT_NAMES_BY_TEMPLATE: dict[str, dict[str, str]] = {
+    "borang_4b": FIELD_OUTPUT_NAMES_BORANG_4B,
+    "cerai_modern": _auto_field_output_names("cerai_modern"),
+    "cerai_legacy": _auto_field_output_names("cerai_legacy"),
+    "rujuk_modern": _auto_field_output_names("rujuk_modern"),
+    "rujuk_legacy": _auto_field_output_names("rujuk_legacy"),
 }
 
 
@@ -76,15 +98,17 @@ def extract_raw_fields(
     page_results: Sequence[PageOcrResult],
     *,
     boundary_tolerance: float = 0.01,
+    template_name: str = "borang_4b",
 ) -> dict[str, RawField]:
     by_page = {result.page_number: result for result in page_results}
     transforms = {
-        page_number: estimate_transform(result.words, page_number=page_number)
+        page_number: estimate_transform(result.words, page_number=page_number, template_name=template_name)
         for page_number, result in by_page.items()
     }
+    field_output_names = FIELD_OUTPUT_NAMES_BY_TEMPLATE[template_name]
     extracted: dict[str, RawField] = {}
-    for field_key, output_name in FIELD_OUTPUT_NAMES.items():
-        page_number, base_region = get_region(field_key)
+    for field_key, output_name in field_output_names.items():
+        page_number, base_region = get_region(field_key, template_name)
         page_result = by_page.get(page_number)
         transform = transforms.get(page_number, TemplateTransform())
         if transform.safe:

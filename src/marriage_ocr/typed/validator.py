@@ -9,7 +9,7 @@ from marriage_ocr.typed.models import FieldDiagnostic, ProcessingStatus, RawFiel
 from marriage_ocr.typed.normalizer import BIL_PATTERN, DATE_PATTERN, MAS_KAHWIN_PATTERN
 
 
-RETRY_PRIORITY = (
+RETRY_PRIORITY_BORANG_4B = (
     "bil",
     "nama_suami",
     "id_suami",
@@ -27,7 +27,10 @@ RETRY_PRIORITY = (
     "tarikh_nikah",
 )
 
-_STRICT_OUTPUT_FIELDS = {
+# Backward-compatible alias -- pre-record_type module surface.
+RETRY_PRIORITY = RETRY_PRIORITY_BORANG_4B
+
+_STRICT_OUTPUT_FIELDS_BORANG_4B = {
     "bil": "Bil",
     "nama_suami": "Nama Suami",
     "id_suami": "IC Suami",
@@ -43,6 +46,33 @@ _STRICT_OUTPUT_FIELDS = {
     "saksi_1": "Saksi 1",
     "saksi_2": "Saksi 2",
     "tarikh_nikah": "Tarikh Nikah",
+}
+
+# Cerai/Rujuk are new templates (real samples only just attached, unlike the
+# well-tuned Borang 4B fields above) -- validate/retry only the core
+# identity fields plus each type's own key date, rather than replicating the
+# full strict-field list. The many descriptive fields (bangsa, warganegara,
+# alamat, pekerjaan, ...) stay informational: captured, but not blocking or
+# retried, until real volume shows which of them are worth being strict
+# about.
+RETRY_PRIORITY_CERAI = ("bil", "nama_suami", "id_suami", "nama_isteri", "id_isteri", "tarikh_cerai")
+_STRICT_OUTPUT_FIELDS_CERAI = {
+    "bil": "Bil",
+    "nama_suami": "Nama Suami",
+    "id_suami": "IC Suami",
+    "nama_isteri": "Nama Isteri",
+    "id_isteri": "IC Isteri",
+    "tarikh_cerai": "Tarikh Cerai",
+}
+
+RETRY_PRIORITY_RUJUK = ("bil", "nama_suami", "id_suami", "nama_isteri", "id_isteri", "tarikh_rujuk")
+_STRICT_OUTPUT_FIELDS_RUJUK = {
+    "bil": "Bil",
+    "nama_suami": "Nama Suami",
+    "id_suami": "IC Suami",
+    "nama_isteri": "Nama Isteri",
+    "id_isteri": "IC Isteri",
+    "tarikh_rujuk": "Tarikh Rujuk",
 }
 
 _CONTAMINATION_LABELS = ("WARGANEGARA", "BANGSA", "ALAMAT", "SAKSI KEDUA", "BELANJA HANTARAN")
@@ -83,6 +113,46 @@ def validate_record(
     min_age: int = 16,
     max_age: int = 120,
     max_retry_fields: int = 6,
+    template_name: str = "borang_4b",
+) -> ValidationSummary:
+    if template_name == "cerai_modern" or template_name == "cerai_legacy":
+        return _validate_cerai_or_rujuk_record(
+            record,
+            raw_fields,
+            word_confidence_threshold=word_confidence_threshold,
+            max_retry_fields=max_retry_fields,
+            strict_fields=_STRICT_OUTPUT_FIELDS_CERAI,
+            retry_priority=RETRY_PRIORITY_CERAI,
+            date_field="tarikh_cerai",
+        )
+    if template_name == "rujuk_modern" or template_name == "rujuk_legacy":
+        return _validate_cerai_or_rujuk_record(
+            record,
+            raw_fields,
+            word_confidence_threshold=word_confidence_threshold,
+            max_retry_fields=max_retry_fields,
+            strict_fields=_STRICT_OUTPUT_FIELDS_RUJUK,
+            retry_priority=RETRY_PRIORITY_RUJUK,
+            date_field="tarikh_rujuk",
+        )
+    return _validate_borang_4b_record(
+        record,
+        raw_fields,
+        word_confidence_threshold=word_confidence_threshold,
+        min_age=min_age,
+        max_age=max_age,
+        max_retry_fields=max_retry_fields,
+    )
+
+
+def _validate_borang_4b_record(
+    record: ExtractedRecord,
+    raw_fields: Mapping[str, RawField],
+    *,
+    word_confidence_threshold: float,
+    min_age: int = 16,
+    max_age: int = 120,
+    max_retry_fields: int = 6,
 ) -> ValidationSummary:
     diagnostics: dict[str, FieldDiagnostic] = {}
     retry_candidates: list[str] = []
@@ -110,7 +180,7 @@ def validate_record(
             if retryable and key not in retry_candidates:
                 retry_candidates.append(key)
 
-    for key, output_name in _STRICT_OUTPUT_FIELDS.items():
+    for key, output_name in _STRICT_OUTPUT_FIELDS_BORANG_4B.items():
         raw = raw_fields.get(key)
         raw_text = _text(raw.raw_text if raw else None)
         check_text = raw_text.splitlines()[0].strip() if key in {"umur_suami", "umur_isteri"} and raw_text else raw_text
@@ -217,12 +287,81 @@ def validate_record(
         if value not in {None, ""}
     )
 
-    ordered_retry_fields = tuple(key for key in RETRY_PRIORITY if key in retry_candidates)[:max_retry_fields]
+    ordered_retry_fields = tuple(key for key in RETRY_PRIORITY_BORANG_4B if key in retry_candidates)[:max_retry_fields]
     ordered_failed_fields = tuple(failed_fields)
     return ValidationSummary(
         diagnostics=diagnostics,
         retry_fields=ordered_retry_fields,
         failed_fields=ordered_failed_fields,
+        meaningful_field_count=meaningful_field_count,
+    )
+
+
+def _validate_cerai_or_rujuk_record(
+    record: ExtractedRecord,
+    raw_fields: Mapping[str, RawField],
+    *,
+    word_confidence_threshold: float,
+    max_retry_fields: int,
+    strict_fields: Mapping[str, str],
+    retry_priority: Sequence[str],
+    date_field: str,
+) -> ValidationSummary:
+    diagnostics: dict[str, FieldDiagnostic] = {}
+    retry_candidates: list[str] = []
+    failed_fields: list[str] = []
+
+    def mark(key: str, *, output_name: str, valid: bool, confidence: float, issues: Sequence[str] = ()) -> None:
+        diagnostics[key] = FieldDiagnostic(
+            key=key, output_name=output_name, valid=valid, confidence=confidence, issues=tuple(issues)
+        )
+        if not valid:
+            failed_fields.append(output_name)
+            if key not in retry_candidates:
+                retry_candidates.append(key)
+
+    for key, output_name in strict_fields.items():
+        raw = raw_fields.get(key)
+        raw_text = _text(raw.raw_text if raw else None)
+        confidence = float(raw.confidence if raw else 0.0)
+        issues: list[str] = []
+
+        if key == "bil":
+            valid = bool(record.bil and BIL_PATTERN.fullmatch(record.bil))
+        elif key == "nama_suami":
+            valid = bool(record.nama_suami and _non_label_text(record.nama_suami, output_name))
+        elif key == "id_suami":
+            valid = bool(record.ic_suami and is_valid_malaysian_ic(record.ic_suami))
+        elif key == "nama_isteri":
+            valid = bool(record.nama_isteri and _non_label_text(record.nama_isteri, output_name))
+        elif key == "id_isteri":
+            valid = bool(record.ic_isteri and is_valid_malaysian_ic(record.ic_isteri))
+        elif key == date_field:
+            valid = bool(getattr(record, date_field, None) and _valid_date(getattr(record, date_field)))
+        else:  # pragma: no cover - defensive, every strict_fields key is handled above
+            valid = True
+
+        if raw_text and confidence < word_confidence_threshold:
+            valid = False
+            issues.append(f"confidence below threshold: {confidence:.3f}")
+
+        if not raw_text:
+            issues.append("missing field")
+            valid = False
+
+        mark(key, output_name=output_name, valid=valid, confidence=confidence, issues=issues)
+
+    meaningful_field_count = sum(
+        1
+        for value in [record.bil, record.nama_suami, record.ic_suami, record.nama_isteri, record.ic_isteri, getattr(record, date_field, None)]
+        if value not in {None, ""}
+    )
+
+    ordered_retry_fields = tuple(key for key in retry_priority if key in retry_candidates)[:max_retry_fields]
+    return ValidationSummary(
+        diagnostics=diagnostics,
+        retry_fields=ordered_retry_fields,
+        failed_fields=tuple(failed_fields),
         meaningful_field_count=meaningful_field_count,
     )
 

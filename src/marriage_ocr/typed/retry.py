@@ -18,12 +18,13 @@ def create_retry_crops(
     field_keys: Sequence[str],
     retry_dir: Path,
     padding_ratio: float = 0.05,
+    template_name: str = "borang_4b",
 ) -> tuple[RetryCrop, ...]:
     retry_crops: list[RetryCrop] = []
     page_lookup = {page.page_number: page for page in pages}
     retry_dir.mkdir(parents=True, exist_ok=True)
     for field_key in field_keys:
-        page_number, region = get_region(field_key)
+        page_number, region = get_region(field_key, template_name)
         page = page_lookup.get(page_number)
         if page is None:
             raise ValueError(f"Retry field {field_key} has no rendered page {page_number}")

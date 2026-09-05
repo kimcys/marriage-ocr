@@ -122,6 +122,63 @@ def test_insert_record_normalizes_status_and_source_numbers(monkeypatch):
     assert captured_params[1][27].obj == "{\"ok\": true}"
 
 
+def test_mark_file_skipped_persists_classification_fields(monkeypatch):
+    captured_params = []
+
+    class DummyCursor:
+        def execute(self, query, params=None):
+            captured_params.append(params)
+
+        def fetchone(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyConnection:
+        def __init__(self):
+            self.cursor_obj = DummyCursor()
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(db_postgres, "get_connection", lambda: DummyConnection())
+
+    db_postgres.mark_file_skipped(
+        1,
+        "jawi_page.jpg",
+        "SKIPPED_JAWI",
+        doc_type="handwritten",
+        record_type="rujuk",
+        layout_variant="legacy",
+        is_jawi=True,
+        jawi_proportion=0.97,
+        notes=["jawi_proportion=0.97 from ar-hinted pass (40 alphabetic chars recognized)"],
+    )
+
+    (params,) = captured_params
+    assert params[1] == "jawi_page.jpg"
+    assert params[2] == "SKIPPED_JAWI"
+    assert params[4] == "handwritten"
+    assert params[5] == "rujuk"
+    assert params[6] == "legacy"
+    assert params[7] is True
+    assert params[8] == 0.97
+    assert params[9].obj == ["jawi_proportion=0.97 from ar-hinted pass (40 alphabetic chars recognized)"]
+
+
 def test_insert_record_persists_record_type_for_cerai(monkeypatch):
     captured_params = []
 

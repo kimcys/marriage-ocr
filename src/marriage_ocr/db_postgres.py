@@ -43,7 +43,18 @@ CREATE TABLE IF NOT EXISTS processed_files (
     file_hash TEXT,
     status TEXT NOT NULL,
     processed_at TIMESTAMPTZ,
-    error_message TEXT
+    error_message TEXT,
+
+    -- Populated by the triage stage (src/marriage_ocr/triage.py) before
+    -- routing to a pipeline. status additionally takes on 'SKIPPED_JAWI',
+    -- 'BLOCKED_NO_TEMPLATE', and 'NEEDS_MANUAL_CLASSIFICATION' alongside the
+    -- original 'DONE'/'FAILED' -- see mark_file_skipped().
+    doc_type TEXT,
+    record_type TEXT,
+    layout_variant TEXT,
+    is_jawi BOOLEAN,
+    jawi_proportion DOUBLE PRECISION,
+    classification_notes JSONB
 );
 
 CREATE TABLE IF NOT EXISTS records (
@@ -448,6 +459,73 @@ def mark_file_failed(batch_id: int, file_path: str, error_message: str):
                 WHERE id = %s
                 """,
                 (batch_id,),
+            )
+
+        conn.commit()
+
+
+def mark_file_skipped(
+    batch_id: int,
+    file_path: str,
+    status: str,
+    *,
+    doc_type: str | None = None,
+    record_type: str | None = None,
+    layout_variant: str | None = None,
+    is_jawi: bool | None = None,
+    jawi_proportion: float | None = None,
+    notes: list[str] | None = None,
+):
+    """Record a file the triage stage (src/marriage_ocr/triage.py) decided
+    not to run through a pipeline at all -- e.g. status='SKIPPED_JAWI' for a
+    page that's essentially entirely Jawi script, or 'BLOCKED_NO_TEMPLATE'
+    for a typed Cerai/Rujuk certificate with no Borang template yet. Mirrors
+    mark_file_failed's shape but doesn't touch batches.failed_records, since
+    this isn't a failure -- it's an intentional, auditable skip.
+    """
+    now = utcnow()
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO processed_files (
+                    batch_id,
+                    file_path,
+                    status,
+                    processed_at,
+                    doc_type,
+                    record_type,
+                    layout_variant,
+                    is_jawi,
+                    jawi_proportion,
+                    classification_notes
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (file_path)
+                DO UPDATE SET
+                    batch_id = EXCLUDED.batch_id,
+                    status = EXCLUDED.status,
+                    processed_at = EXCLUDED.processed_at,
+                    doc_type = EXCLUDED.doc_type,
+                    record_type = EXCLUDED.record_type,
+                    layout_variant = EXCLUDED.layout_variant,
+                    is_jawi = EXCLUDED.is_jawi,
+                    jawi_proportion = EXCLUDED.jawi_proportion,
+                    classification_notes = EXCLUDED.classification_notes
+                """,
+                (
+                    batch_id,
+                    file_path,
+                    status,
+                    now,
+                    doc_type,
+                    record_type,
+                    layout_variant,
+                    is_jawi,
+                    jawi_proportion,
+                    psycopg.types.json.Jsonb(notes or []),
+                ),
             )
 
         conn.commit()

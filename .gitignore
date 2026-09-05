@@ -26,3 +26,6 @@ data/typed_acceptance_ground_truth.csv
 marrige-ocr-67d8deb16ffd.json
 *-????????????.json
 service-account*.json
+
+# OneDrive (msal) cached login token -- holds a live refresh token.
+.onedrive_token_cache.json

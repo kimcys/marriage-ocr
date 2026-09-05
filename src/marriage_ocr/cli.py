@@ -19,6 +19,11 @@ from marriage_ocr.pipeline import ProcessProgress, process_input
 app = typer.Typer(help="Marriage register OCR pipeline")
 console = Console()
 
+onedrive_app = typer.Typer(help="Pull an arbitrary OneDrive share link to local disk")
+app.add_typer(onedrive_app, name="onedrive")
+
+DEFAULT_ONEDRIVE_TOKEN_CACHE = Path(".onedrive_token_cache.json")
+
 
 def load_config(path: Path) -> dict[str, Any]:
     return load_runtime_config(path).data
@@ -415,6 +420,55 @@ def export_training(
                 "reset_output": reset_output,
             },
         )
+
+
+@onedrive_app.command("login")
+def onedrive_login(
+    client_id: str = typer.Option(
+        ..., "--client-id", envvar="MARRIAGE_OCR_ONEDRIVE_CLIENT_ID",
+        help="Azure AD app (client) ID from your app registration",
+    ),
+    token_cache: Path = typer.Option(
+        DEFAULT_ONEDRIVE_TOKEN_CACHE, "--token-cache",
+        help="Local file to cache the login token in (gitignored)",
+    ),
+) -> None:
+    """One-time interactive device-code login. Run this once; `onedrive
+    fetch` reuses and silently refreshes the cached token afterwards."""
+    from marriage_ocr.onedrive_ingest import OneDriveClient
+
+    console.print("[bold green]OneDrive login[/bold green]")
+    client = OneDriveClient(client_id=client_id, token_cache_path=token_cache)
+    client.login()
+    console.print(f"Login cached at {token_cache}")
+
+
+@onedrive_app.command("fetch")
+def onedrive_fetch(
+    url: str = typer.Option(..., "--url", help="OneDrive sharing link"),
+    dest: Path = typer.Option(..., "--dest", help="Local folder to mirror the share into"),
+    client_id: str = typer.Option(
+        ..., "--client-id", envvar="MARRIAGE_OCR_ONEDRIVE_CLIENT_ID",
+        help="Azure AD app (client) ID from your app registration",
+    ),
+    token_cache: Path = typer.Option(
+        DEFAULT_ONEDRIVE_TOKEN_CACHE, "--token-cache",
+        help="Local file the login token is cached in (see `onedrive login`)",
+    ),
+) -> None:
+    """Resolve a OneDrive share link and mirror its full contents under
+    --dest, preserving folder structure. Point --input at --dest afterwards
+    for `process` / `process-typed` / the batch orchestrator."""
+    from marriage_ocr.onedrive_ingest import OneDriveClient
+
+    console.print("[bold green]OneDrive fetch[/bold green]")
+    console.print(f"URL: {url}")
+    console.print(f"Dest: {dest}")
+
+    client = OneDriveClient(client_id=client_id, token_cache_path=token_cache)
+    downloaded = client.download_share(url, dest)
+
+    console.print(f"[bold green]Downloaded {len(downloaded)} file(s) to {dest}[/bold green]")
 
 
 if __name__ == "__main__":

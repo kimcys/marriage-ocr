@@ -31,12 +31,13 @@ def render_typed_pdf(
     debug_dir: Path,
     *,
     dpi: int = 300,
-) -> tuple[RenderedPage, RenderedPage]:
+    expected_pages: int = 2,
+) -> tuple[RenderedPage, ...]:
     document = fitz.open(pdf_path)
     try:
-        if document.page_count != 2:
+        if document.page_count != expected_pages:
             raise ValueError(
-                f"Typed Borang 4B expected exactly 2 pages, found {document.page_count}: {pdf_path.name}"
+                f"Expected exactly {expected_pages} page(s), found {document.page_count}: {pdf_path.name}"
             )
         debug_dir.mkdir(parents=True, exist_ok=True)
         scale = dpi / 72.0
@@ -69,7 +70,7 @@ def render_typed_pdf(
                     height=pixmap.height,
                 )
             )
-        return (rendered[0], rendered[1])
+        return tuple(rendered)
     finally:
         document.close()
 

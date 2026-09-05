@@ -64,6 +64,7 @@ class ExtractedRecord:
 
     tarikh_nikah: str | None = None
     tarikh_nikah_raw: str | None = None
+    tarikh_nikah_hijri: str | None = None
     tarikh_keluar: str | None = None
     tarikh_keluar_raw: str | None = None
 
@@ -104,6 +105,63 @@ class ExtractedRecord:
     # Cerai/Rujuk equivalent of Nikah's `remarks`.
     catatan_raw: str | None = None
     hal_hal_lain: str | None = None
+
+    # Typed Cerai (Borang 8/9/10) and Rujuk (Borang 5/7B/8B) certificates
+    # carry richer per-spouse personal details than any handwritten ledger
+    # does -- see src/marriage_ocr/typed/template.py for the real samples
+    # these are grounded in. Shared by both typed record types.
+    bangsa_suami: str | None = None
+    bangsa_isteri: str | None = None
+    tarikh_lahir_suami: str | None = None
+    tarikh_lahir_isteri: str | None = None
+    warganegara_suami: str | None = None
+    warganegara_isteri: str | None = None
+    alamat_suami: str | None = None
+    alamat_isteri: str | None = None
+    # Legacy-only (Borang 5/9, 1984 enactment): home vs. office address kept
+    # as two separate fields rather than the one "Alamat" the modern forms use.
+    alamat_pejabat_suami: str | None = None
+    alamat_pejabat_isteri: str | None = None
+    pekerjaan_suami: str | None = None
+    pekerjaan_isteri: str | None = None
+    tarikh_masuk_islam_suami: str | None = None
+    tarikh_masuk_islam_isteri: str | None = None
+    no_kad_perakuan_islam_suami: str | None = None
+    no_kad_perakuan_islam_isteri: str | None = None
+
+    # Cross-reference bil numbers and their Hijri date pairs (every Masihi
+    # date on these typed forms has a paired Hijrah date; tarikh_nikah_hijri
+    # already existed as precedent for this pattern).
+    bil_daftar_nikah: str | None = None
+    bil_daftar_rujuk_asal: str | None = None
+    tarikh_rujuk_hijri: str | None = None
+    tarikh_cerai_hijri: str | None = None
+    tarikh_daftar_hijri: str | None = None
+
+    # Typed Cerai-specific.
+    bilangan_kes_mal: str | None = None
+    tempat_nikah_daerah: str | None = None
+    tempat_nikah_negeri: str | None = None
+    talak_kali_ke: str | None = None
+    bayaran_tebus_talak: str | None = None
+    # tempat_cerai (above) already holds the "Cara Bercerai" court-permission
+    # value, matching the handwritten Cerai ledger's own confusingly-named
+    # "Tempat Cerai" column; tempat_bercerai is the genuinely place-shaped
+    # field the typed form separately has (e.g. "DALAM MAHKAMAH").
+    tempat_bercerai: str | None = None
+    cerai_dalam_keadaan: str | None = None
+    # Legacy-only (Borang 9): a single combined reference field, a case
+    # number, and two named witnesses (a typed Cerai cert having witnesses
+    # at all is specific to the 1984-enactment form).
+    no_sijil_perakuan_nikah_rujuk: str | None = None
+    no_permohonan_cerai: str | None = None
+
+    # Typed Rujuk-specific.
+    jawatan_pendaftar: str | None = None
+
+    # Legacy-only (Borang 5/9): a small registration fee, printed in the
+    # pre-decimalisation "$" notation on these older forms.
+    jumlah_bayaran: str | None = None
 
     confidence: float = 0.0
     status_review: str = "REVIEW"
