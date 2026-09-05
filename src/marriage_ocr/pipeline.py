@@ -18,7 +18,7 @@ from marriage_ocr.refinement.models import (
     FieldRefinementDecision,
     FieldRefinementSettings,
 )
-from marriage_ocr.validation import validate_record
+from marriage_ocr.validation import parser_confidence_clears_threshold, validate_record
 from llm import GeminiRecordExtractor, merge_parser_and_gemini
 
 
@@ -45,6 +45,8 @@ class ProcessResult:
     refinement_ocr_calls: int = 0
     refinement_audit_rows: list[FieldRefinementAuditRow] = field(default_factory=list)
     failed_pages: list[str] = field(default_factory=list)
+    gemini_calls: int = 0
+    gemini_calls_skipped: int = 0
 
 
 ProgressCallback = Callable[[ProcessProgress], None]
@@ -130,7 +132,9 @@ def process_input(
         validation_config=validation_input,
         record_type=record_type,
     )
-    gemini_state: dict[str, bool] = {"disabled": False}
+    gemini_state: dict[str, Any] = {"disabled": False, "gemini_calls": 0, "gemini_calls_skipped": 0}
+    skip_gemini_when_parser_ok = bool(llm_cfg.get("skip_gemini_when_parser_ok", False))
+    skip_gemini_min_confidence = float(llm_cfg.get("skip_gemini_min_confidence", 0.90))
 
     pages = load_document_pages(
         input_path,
@@ -276,6 +280,8 @@ def process_input(
                         source_file=str(page.relative_source),
                         source_page=page.source_page,
                         record_type=record_type,
+                        skip_gemini_when_parser_ok=skip_gemini_when_parser_ok,
+                        skip_gemini_min_confidence=skip_gemini_min_confidence,
                     )
                     validated_record = replace(
                         validated_record,
@@ -386,6 +392,11 @@ def process_input(
         )
         if total_refinement_ocr_calls:
             completion_message += f"; refinement OCR calls {total_refinement_ocr_calls}"
+        if gemini_state.get("gemini_calls") or gemini_state.get("gemini_calls_skipped"):
+            completion_message += (
+                f"; Gemini calls {gemini_state.get('gemini_calls', 0)}"
+                f" (skipped {gemini_state.get('gemini_calls_skipped', 0)} -- parser already confident)"
+            )
         completion_message += f" [{status_summary}]"
         if export_summary is not None:
             export_label = "CSV" if export_summary.output_path.suffix.lower() == ".csv" else "XLSX"
@@ -444,6 +455,8 @@ def process_input(
         refinement_ocr_calls=total_refinement_ocr_calls,
         refinement_audit_rows=refinement_audit_rows,
         failed_pages=failed_pages,
+        gemini_calls=gemini_state.get("gemini_calls", 0),
+        gemini_calls_skipped=gemini_state.get("gemini_calls_skipped", 0),
     )
     if temp_debug_workspace is not None:
         temp_debug_workspace.cleanup()
@@ -694,12 +707,14 @@ def _validate_record_with_optional_gemini(
     record_output: Any,
     layout_confidence: float,
     gemini_processor: Callable[[ExtractedRecord, Any], ExtractedRecord] | None,
-    gemini_state: dict[str, bool] | None,
+    gemini_state: dict[str, Any] | None,
     validation_config: Mapping[str, Any],
     logger: Any,
     source_file: str,
     source_page: int,
     record_type: str = "nikah",
+    skip_gemini_when_parser_ok: bool = False,
+    skip_gemini_min_confidence: float = 0.90,
 ) -> ExtractedRecord:
     if gemini_processor is None or (gemini_state is not None and gemini_state.get("disabled", False)):
         return validate_record(
@@ -710,6 +725,28 @@ def _validate_record_with_optional_gemini(
             record_type=record_type,
         )
 
+    # Nikah is the only record_type with a real deterministic parser (see
+    # the record_type == "nikah" branch above in process_input) -- Cerai/
+    # Rujuk always start from _blank_parsed_record, so validate_record on
+    # them can never reach status_review == "OK" and this check is a no-op
+    # for them. Guarding on record_type explicitly (rather than relying on
+    # that fact silently holding) keeps the skip decision legible and safe
+    # if _blank_parsed_record's behavior ever changes.
+    if record_type == "nikah" and skip_gemini_when_parser_ok:
+        parser_validated = validate_record(
+            parsed_record,
+            record_output.cell_results,
+            validation_config,
+            layout_confidence=layout_confidence,
+            record_type=record_type,
+        )
+        if parser_confidence_clears_threshold(parser_validated, min_confidence=skip_gemini_min_confidence):
+            if gemini_state is not None:
+                gemini_state["gemini_calls_skipped"] = gemini_state.get("gemini_calls_skipped", 0) + 1
+            return parser_validated
+
+    if gemini_state is not None:
+        gemini_state["gemini_calls"] = gemini_state.get("gemini_calls", 0) + 1
     try:
         return gemini_processor(
             parsed_record,

@@ -354,6 +354,129 @@ def test_validate_record_with_optional_gemini_receives_refined_record() -> None:
     assert validated.nama_suami == "AHMAD BIN ALI"
 
 
+def test_validate_record_with_optional_gemini_skips_gemini_when_nikah_parser_confident(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "validate_record",
+        lambda *args, **kwargs: ExtractedRecord(status_review="OK", confidence=0.95),
+    )
+
+    def unexpected_gemini_call(*args, **kwargs):  # pragma: no cover - must not run
+        raise AssertionError("Gemini should not be called when the parser already clears the threshold")
+
+    record_output = _FakeRecordOutput(
+        record_dir=Path("."),
+        cell_results={"bil": OcrResult(text="1", average_confidence=0.95)},
+    )
+    gemini_state: dict[str, object] = {"disabled": False}
+
+    validated = pipeline._validate_record_with_optional_gemini(
+        parsed_record=ExtractedRecord(bil="1"),
+        record_output=record_output,
+        layout_confidence=1.0,
+        gemini_processor=unexpected_gemini_call,
+        gemini_state=gemini_state,
+        validation_config={"ok_confidence_threshold": 0.85, "min_average_confidence": 0.5},
+        logger=object(),
+        source_file="input.pdf",
+        source_page=1,
+        record_type="nikah",
+        skip_gemini_when_parser_ok=True,
+        skip_gemini_min_confidence=0.90,
+    )
+
+    assert validated.status_review == "OK"
+    assert validated.confidence == 0.95
+    assert gemini_state["gemini_calls_skipped"] == 1
+    assert gemini_state.get("gemini_calls", 0) == 0
+
+
+def test_validate_record_with_optional_gemini_still_calls_gemini_when_nikah_parser_unsure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "validate_record",
+        lambda *args, **kwargs: ExtractedRecord(status_review="REVIEW", confidence=0.60),
+    )
+
+    calls = {"count": 0}
+
+    def gemini_processor(parsed_record, record_output, *, layout_confidence):
+        calls["count"] += 1
+        return ExtractedRecord(status_review="OK", confidence=0.97)
+
+    record_output = _FakeRecordOutput(
+        record_dir=Path("."),
+        cell_results={"bil": OcrResult(text="1", average_confidence=0.95)},
+    )
+    gemini_state: dict[str, object] = {"disabled": False}
+
+    validated = pipeline._validate_record_with_optional_gemini(
+        parsed_record=ExtractedRecord(bil="1"),
+        record_output=record_output,
+        layout_confidence=1.0,
+        gemini_processor=gemini_processor,
+        gemini_state=gemini_state,
+        validation_config={"ok_confidence_threshold": 0.85, "min_average_confidence": 0.5},
+        logger=object(),
+        source_file="input.pdf",
+        source_page=1,
+        record_type="nikah",
+        skip_gemini_when_parser_ok=True,
+        skip_gemini_min_confidence=0.90,
+    )
+
+    assert calls["count"] == 1
+    assert validated.confidence == 0.97
+    assert gemini_state["gemini_calls"] == 1
+    assert gemini_state.get("gemini_calls_skipped", 0) == 0
+
+
+def test_validate_record_with_optional_gemini_never_skips_for_non_nikah_record_type(monkeypatch) -> None:
+    """Cerai/Rujuk always start from _blank_parsed_record (no real
+    deterministic parser exists for them yet -- see pipeline.py's
+    record_type == "nikah" branch), so in practice validate_record could
+    never return status_review == "OK" for them on its own. This test
+    forces that impossible case via monkeypatch anyway, to pin down the
+    record_type guard itself rather than relying on that fact holding.
+    """
+    monkeypatch.setattr(
+        pipeline,
+        "validate_record",
+        lambda *args, **kwargs: ExtractedRecord(status_review="OK", confidence=0.99),
+    )
+
+    calls = {"count": 0}
+
+    def gemini_processor(parsed_record, record_output, *, layout_confidence):
+        calls["count"] += 1
+        return ExtractedRecord(status_review="OK", confidence=0.80, record_type="CERAI")
+
+    record_output = _FakeRecordOutput(
+        record_dir=Path("."),
+        cell_results={"bil": OcrResult(text="1", average_confidence=0.95)},
+    )
+    gemini_state: dict[str, object] = {"disabled": False}
+
+    pipeline._validate_record_with_optional_gemini(
+        parsed_record=ExtractedRecord(bil="1"),
+        record_output=record_output,
+        layout_confidence=1.0,
+        gemini_processor=gemini_processor,
+        gemini_state=gemini_state,
+        validation_config={},
+        logger=object(),
+        source_file="input.pdf",
+        source_page=1,
+        record_type="cerai",
+        skip_gemini_when_parser_ok=True,
+        skip_gemini_min_confidence=0.90,
+    )
+
+    assert calls["count"] == 1
+    assert gemini_state["gemini_calls"] == 1
+    assert gemini_state.get("gemini_calls_skipped", 0) == 0
+
+
 def test_validate_record_with_optional_gemini_accepts_refined_record() -> None:
     class FakeLogger:
         def warning(self, *args: object, **kwargs: object) -> None:

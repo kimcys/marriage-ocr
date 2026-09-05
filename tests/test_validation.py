@@ -5,6 +5,7 @@ from marriage_ocr.validation import (
     is_suspicious_name,
     is_valid_date,
     is_valid_malaysian_ic,
+    parser_confidence_clears_threshold,
     validate_record,
 )
 
@@ -49,6 +50,18 @@ def test_validation_marks_good_record_ok() -> None:
     assert validated.status_review == "OK"
     assert validated.review_reason == []
     assert validated.confidence >= 0.85
+
+
+def test_parser_confidence_clears_threshold_requires_ok_and_high_confidence() -> None:
+    ok_high = ExtractedRecord(status_review="OK", confidence=0.95)
+    ok_borderline = ExtractedRecord(status_review="OK", confidence=0.90)
+    ok_low = ExtractedRecord(status_review="OK", confidence=0.86)
+    review_high_confidence = ExtractedRecord(status_review="REVIEW", confidence=0.99)
+
+    assert parser_confidence_clears_threshold(ok_high, min_confidence=0.90) is True
+    assert parser_confidence_clears_threshold(ok_borderline, min_confidence=0.90) is True
+    assert parser_confidence_clears_threshold(ok_low, min_confidence=0.90) is False
+    assert parser_confidence_clears_threshold(review_high_confidence, min_confidence=0.90) is False
 
 
 def test_validation_marks_bad_ocr_review_with_reasons() -> None:

@@ -62,6 +62,19 @@ def validate_record(
     return validated
 
 
+def parser_confidence_clears_threshold(record: ExtractedRecord, *, min_confidence: float) -> bool:
+    """True when a parser-only validated record is trustworthy enough to
+    skip a Gemini call entirely -- status_review must already be "OK" (no
+    critical failures, no review reasons) AND confidence must clear a bar
+    stricter than validate_record's own ok_confidence_threshold, since this
+    decision forgoes Gemini's second opinion altogether rather than just
+    flagging for human review. Shared by pipeline.py's synchronous path and
+    llm/gemini_batch_extractor.py's offline batch path so the two apply the
+    exact same bar.
+    """
+    return record.status_review == "OK" and (record.confidence or 0.0) >= min_confidence
+
+
 def _score_nikah(validated: ExtractedRecord, validation_config: Mapping[str, Any]) -> tuple[list[str], bool, float]:
     reasons: list[str] = []
     critical = False

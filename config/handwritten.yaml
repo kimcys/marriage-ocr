@@ -75,13 +75,22 @@ ocr:
 llm:
   enabled: true
   provider: gemini
-  model: gemini-3.1-pro-preview
+  model: gemini-3-flash-preview
   prompt_mode: handwritten_aggressive
   temperature: 0.0
   max_output_tokens: 4096
   save_raw_json: true
   prefer_gemini_threshold: 0.55
   review_below_field_confidence: 0.65
+  # Skip the Gemini call entirely when the deterministic parser alone
+  # already produces status_review: OK at >= this confidence -- Nikah is
+  # the only record_type with a real parser (Cerai/Rujuk always need
+  # Gemini), so this only ever fires here. 0.90 is deliberately stricter
+  # than validation.ok_confidence_threshold (0.85) below: this forgoes
+  # Gemini's second opinion altogether rather than just flagging for
+  # review, so it should only trigger on the parser's clearest cases.
+  skip_gemini_when_parser_ok: true
+  skip_gemini_min_confidence: 0.90
 
 debug:
   retain_artifacts: true

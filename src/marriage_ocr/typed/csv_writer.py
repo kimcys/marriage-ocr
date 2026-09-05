@@ -5,7 +5,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from marriage_ocr.models import ExtractedRecord
 from marriage_ocr.typed.models import ProcessingStatus, TypedDocumentResult
@@ -83,6 +83,7 @@ TYPED_CSV_COLUMNS = [
     "Failed Fields",
     "Retry Count",
     "Error Message",
+    "Duplicate Of Source File",
 ]
 
 
@@ -167,7 +168,26 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Failed Fields": result.failed_fields_text,
         "Retry Count": _value(result.retry_count),
         "Error Message": _value(result.error_message),
+        "Duplicate Of Source File": "",
     }
+
+
+def _content_key(row: Mapping[str, str]) -> tuple[str, str, str, str] | None:
+    """Content-identity key for cross-file dedup: same record_type + Bil +
+    at least one IC in common as a row already in the store, but from a
+    *different* source file -- catches the same real register entry
+    scanned/photographed twice under different filenames (byte-different,
+    so the batch-runner's file-hash check can't catch it). Bil alone is not
+    a safe key -- it repeats across different registrar offices/books --
+    so this only fires when an IC is also present.
+    """
+    record_type = row.get("Record Type") or ""
+    bil = row.get("Bil") or ""
+    ic_suami = row.get("IC Suami") or row.get("IC Baru Suami") or ""
+    ic_isteri = row.get("IC Isteri") or row.get("IC Baru Isteri") or ""
+    if not bil or not (ic_suami or ic_isteri):
+        return None
+    return (record_type, bil, ic_suami, ic_isteri)
 
 
 class TypedCsvStore:
@@ -176,6 +196,7 @@ class TypedCsvStore:
         self.skip_existing = skip_existing
         self._rows: dict[str, dict[str, str]] = {}
         self._statuses: dict[str, str] = {}
+        self._content_index: dict[tuple[str, str, str, str], str] = {}
 
     @classmethod
     def load(
@@ -192,8 +213,13 @@ class TypedCsvStore:
                     source = row.get("Source File", "")
                     if not source:
                         continue
-                    store._rows[source] = {column: row.get(column, "") or "" for column in TYPED_CSV_COLUMNS}
-                    store._statuses[source] = store._rows[source]["Processing Status"]
+                    loaded_row = {column: row.get(column, "") or "" for column in TYPED_CSV_COLUMNS}
+                    store._rows[source] = loaded_row
+                    store._statuses[source] = loaded_row["Processing Status"]
+                    if not loaded_row.get("Duplicate Of Source File"):
+                        key = _content_key(loaded_row)
+                        if key is not None:
+                            store._content_index.setdefault(key, source)
         return store
 
     def should_skip(self, source_file: str) -> bool:
@@ -206,6 +232,13 @@ class TypedCsvStore:
 
     def upsert(self, result: TypedDocumentResult) -> None:
         row = _record_to_row(result)
+        key = _content_key(row)
+        if key is not None:
+            existing_source = self._content_index.get(key)
+            if existing_source is not None and existing_source != result.source_file:
+                row["Duplicate Of Source File"] = existing_source
+            else:
+                self._content_index[key] = result.source_file
         self._rows[result.source_file] = row
         self._statuses[result.source_file] = row["Processing Status"]
 

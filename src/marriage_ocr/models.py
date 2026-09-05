@@ -186,6 +186,13 @@ class ExtractedRecord:
     created_at: str | None = None
     updated_at: str | None = None
 
+    # Set by batch_runner.py's content-identity dedup check (same
+    # record_type + Bil + an IC in common as an already-inserted record,
+    # from a *different* source file) -- not raised by any OCR/normalizer
+    # code path.
+    is_duplicate: bool = False
+    duplicate_of_record_id: int | None = None
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 

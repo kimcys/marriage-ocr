@@ -398,3 +398,150 @@ def test_fetch_records_for_batch_returns_extracted_records(monkeypatch):
 
     assert [record.bil for record in records] == ["2", "1"]
     assert [record.nama_suami for record in records] == ["SECOND", "FIRST"]
+
+
+def _dummy_connection_returning(row):
+    class DummyCursor:
+        def execute(self, query, params=None):
+            self.query = query
+            self.params = params
+
+        def fetchone(self):
+            return row
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyConnection:
+        def cursor(self):
+            return DummyCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    return DummyConnection()
+
+
+def test_find_done_file_by_hash_returns_the_original_path(monkeypatch):
+    monkeypatch.setattr(
+        db_postgres, "get_connection", lambda: _dummy_connection_returning({"file_path": "original/scan.pdf"})
+    )
+
+    assert db_postgres.find_done_file_by_hash("abc123") == "original/scan.pdf"
+
+
+def test_find_done_file_by_hash_returns_none_when_no_match(monkeypatch):
+    monkeypatch.setattr(db_postgres, "get_connection", lambda: _dummy_connection_returning(None))
+
+    assert db_postgres.find_done_file_by_hash("abc123") is None
+
+
+def test_find_done_file_by_hash_skips_query_for_empty_hash(monkeypatch):
+    def _boom():
+        raise AssertionError("must not query when file_hash is empty")
+
+    monkeypatch.setattr(db_postgres, "get_connection", _boom)
+
+    assert db_postgres.find_done_file_by_hash("") is None
+
+
+def test_find_duplicate_record_requires_bil_and_an_ic(monkeypatch):
+    def _boom():
+        raise AssertionError("must not query when bil or both ICs are missing")
+
+    monkeypatch.setattr(db_postgres, "get_connection", _boom)
+
+    assert (
+        db_postgres.find_duplicate_record(
+            record_type="NIKAH",
+            bil=None,
+            ic_a="740326145837",
+            ic_b=None,
+            exclude_source_file="a.jpg",
+            exclude_source_page=1,
+            exclude_source_record=1,
+        )
+        is None
+    )
+    assert (
+        db_postgres.find_duplicate_record(
+            record_type="NIKAH",
+            bil="1/2010",
+            ic_a=None,
+            ic_b=None,
+            exclude_source_file="a.jpg",
+            exclude_source_page=1,
+            exclude_source_record=1,
+        )
+        is None
+    )
+
+
+def test_find_duplicate_record_uses_cerai_rujuk_ic_columns(monkeypatch):
+    captured = {}
+
+    class DummyCursor:
+        def execute(self, query, params=None):
+            captured["query"] = " ".join(query.split())
+            captured["params"] = params
+
+        def fetchone(self):
+            return {"id": 42}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyConnection:
+        def cursor(self):
+            return DummyCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(db_postgres, "get_connection", lambda: DummyConnection())
+
+    result = db_postgres.find_duplicate_record(
+        record_type="CERAI",
+        bil="536/2010",
+        ic_a="740326145837",
+        ic_b=None,
+        exclude_source_file="b.pdf",
+        exclude_source_page=1,
+        exclude_source_record=1,
+    )
+
+    assert result == 42
+    assert "ic_suami = %s OR ic_isteri = %s" in captured["query"]
+    assert captured["params"][:4] == ("CERAI", "536/2010", "740326145837", None)
+
+
+def test_get_existing_record_identity_returns_batch_id_and_dedup_flags(monkeypatch):
+    monkeypatch.setattr(
+        db_postgres,
+        "get_connection",
+        lambda: _dummy_connection_returning(
+            {"batch_id": 7, "is_duplicate": True, "duplicate_of_record_id": 99}
+        ),
+    )
+
+    identity = db_postgres.get_existing_record_identity("a.jpg", 1, 1)
+
+    assert identity == {"batch_id": 7, "is_duplicate": True, "duplicate_of_record_id": 99}
+
+
+def test_get_existing_record_identity_returns_none_when_no_match(monkeypatch):
+    monkeypatch.setattr(db_postgres, "get_connection", lambda: _dummy_connection_returning(None))
+
+    assert db_postgres.get_existing_record_identity("a.jpg", 1, 1) is None

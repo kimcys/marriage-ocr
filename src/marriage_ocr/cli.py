@@ -22,6 +22,9 @@ console = Console()
 onedrive_app = typer.Typer(help="Pull an arbitrary OneDrive share link to local disk")
 app.add_typer(onedrive_app, name="onedrive")
 
+gemini_batch_app = typer.Typer(help="Re-run Gemini semantic extraction via Batch Mode (~50% cheaper, async)")
+app.add_typer(gemini_batch_app, name="gemini-batch")
+
 DEFAULT_ONEDRIVE_TOKEN_CACHE = Path(".onedrive_token_cache.json")
 
 
@@ -422,6 +425,28 @@ def export_training(
         )
 
 
+@onedrive_app.command("fetch-public")
+def onedrive_fetch_public(
+    url: str = typer.Option(..., "--url", help="OneDrive/SharePoint sharing link"),
+    dest: Path = typer.Option(..., "--dest", help="Local folder to save the downloaded file(s) into"),
+) -> None:
+    """Download a link shared as "Anyone with the link" with a plain HTTP
+    GET -- no Microsoft sign-in, no Entra ID app registration, no
+    --client-id needed. Use this when you can't set up `onedrive login`
+    (e.g. no Entra ID access) and the client is able to share the link as
+    "Anyone". Fails with a clear error if the link actually requires
+    sign-in; fall back to `onedrive login` + `onedrive fetch` in that case."""
+    from marriage_ocr.onedrive_ingest import download_anonymous_share
+
+    console.print("[bold green]OneDrive anonymous fetch[/bold green]")
+    console.print(f"URL: {url}")
+    console.print(f"Dest: {dest}")
+
+    downloaded = download_anonymous_share(url, dest)
+
+    console.print(f"[bold green]Downloaded {len(downloaded)} file(s) to {dest}[/bold green]")
+
+
 @onedrive_app.command("login")
 def onedrive_login(
     client_id: str = typer.Option(
@@ -469,6 +494,122 @@ def onedrive_fetch(
     downloaded = client.download_share(url, dest)
 
     console.print(f"[bold green]Downloaded {len(downloaded)} file(s) to {dest}[/bold green]")
+
+
+@gemini_batch_app.command("run")
+def gemini_batch_run(
+    debug_root: Path = typer.Option(
+        ..., "--debug-root",
+        help="Debug folder from a prior run (needs debug.retain_artifacts: true) to re-extract",
+    ),
+    config: Path = typer.Option(
+        Path("config/default.yaml"), "--config",
+        help="Config file to read llm/validation/record_type settings from",
+    ),
+    display_name: str | None = typer.Option(
+        None, "--display-name", help="Optional label for the batch job in Google's console",
+    ),
+    poll_seconds: float = typer.Option(
+        30.0, "--poll-seconds", help="Seconds between job-status checks while waiting",
+    ),
+    timeout_seconds: float | None = typer.Option(
+        None, "--timeout-seconds", help="Give up waiting after this long (default: wait indefinitely)",
+    ),
+    sync_db: bool = typer.Option(
+        False, "--sync-db",
+        help=(
+            "Write merged results back into the production Postgres `records` table "
+            "(matched by source_file/source_page/source_record), so a batch_runner.run_batch "
+            "run done with llm.enabled: false actually ends up with Gemini-refined values in "
+            "the DB instead of just in validated_record.json on disk."
+        ),
+    ),
+) -> None:
+    """Submit every record crop under --debug-root as one Gemini Batch Mode
+    job (~50% cheaper than the synchronous path), wait for it, and overwrite
+    each record's validated_record.json with the merged result -- same
+    format the Streamlit review UI already reads.
+
+    Only useful against a run that had `llm.enabled: false` (so Gemini was
+    never called synchronously) and `debug.retain_artifacts: true` (so
+    full_record.jpg / raw_ocr.json / parsed_record.json exist per record).
+    This does not touch `process`/`process-typed`/`batch_runner` at all --
+    Batch Mode's async, wait-for-the-whole-job shape can't fit their
+    real-time per-record flow.
+    """
+    from llm import run_batch_extraction
+
+    runtime: LoggingRuntime | None = None
+
+    try:
+        cfg, _, runtime = _load_command_runtime("gemini-batch-run", config)
+        llm_cfg = dict(cfg.get("llm", {}))
+        ocr_cfg = cfg.get("ocr", {})
+        validation_input = {
+            **cfg.get("validation", {}),
+            "min_average_confidence": ocr_cfg.get("min_average_confidence", 0.50),
+        }
+        record_type = str(cfg.get("record_type", "nikah")).strip().lower()
+        layout_variant = str(cfg.get("layout_variant", "legacy")).strip().lower()
+        llm_cfg.setdefault("record_type", record_type)
+        llm_cfg.setdefault("layout_variant", layout_variant)
+        llm_cfg["save_raw_json"] = False
+
+        console.print("[bold green]Gemini batch run started[/bold green]")
+        console.print(f"Debug root: {debug_root}")
+        console.print(f"Config: {config}")
+        console.print(f"Log file: {runtime.log_path}")
+
+        summary = run_batch_extraction(
+            debug_root,
+            llm_config=llm_cfg,
+            validation_config=validation_input,
+            record_type=record_type,
+            prefer_gemini_threshold=float(llm_cfg.get("prefer_gemini_threshold", 0.70)),
+            review_below_field_confidence=float(llm_cfg.get("review_below_field_confidence", 0.80)),
+            display_name=display_name,
+            poll_seconds=poll_seconds,
+            timeout_seconds=timeout_seconds,
+            skip_gemini_when_parser_ok=bool(llm_cfg.get("skip_gemini_when_parser_ok", False)),
+            skip_gemini_min_confidence=float(llm_cfg.get("skip_gemini_min_confidence", 0.90)),
+        )
+
+        console.print(f"Submitted: {summary.submitted}")
+        console.print(f"Merged: {summary.merged}")
+        if summary.skipped_parser_confident:
+            console.print(
+                f"Skipped (parser already confident, no Gemini needed): {len(summary.skipped_parser_confident)}"
+            )
+        if summary.skipped_no_parsed_record:
+            console.print(
+                f"[yellow]Skipped (no parsed_record.json): {len(summary.skipped_no_parsed_record)}[/yellow]"
+            )
+        if summary.failed:
+            console.print(f"[bold red]Failed: {len(summary.failed)}[/bold red]")
+            for key, error_text in summary.failed.items():
+                console.print(f"  {key}: {error_text}")
+
+        if sync_db:
+            from marriage_ocr.batch_runner import sync_gemini_batch_results
+
+            sync_summary = sync_gemini_batch_results(summary.validated_records)
+            console.print(f"Synced to DB: {sync_summary['synced']}")
+            if sync_summary["skipped_no_match"]:
+                console.print(
+                    f"[yellow]No matching DB row (skipped): {len(sync_summary['skipped_no_match'])}[/yellow]"
+                )
+    except typer.BadParameter:
+        raise
+    except typer.Exit:
+        raise
+    except Exception as error:
+        _handle_command_error(
+            error,
+            command_name="gemini-batch-run",
+            config_path=config,
+            runtime=runtime,
+            extra_context={"debug_root": str(debug_root)},
+        )
 
 
 if __name__ == "__main__":

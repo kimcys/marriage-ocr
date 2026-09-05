@@ -109,6 +109,16 @@ CREATE TABLE IF NOT EXISTS records (
     confidence DOUBLE PRECISION DEFAULT 0,
     validation_errors JSONB DEFAULT '[]'::jsonb,
 
+    -- Content-identity dedup (see find_duplicate_record()): a record with
+    -- the same record_type + Bil + a matching IC as an existing, non-
+    -- duplicate record -- e.g. the same physical ledger page scanned/
+    -- photographed twice under different filenames, so the file-hash check
+    -- in processed_files can't catch it. Still inserted (the OCR cost is
+    -- already spent, and the second scan may have OCR'd more cleanly), just
+    -- flagged rather than silently counted as a fresh record.
+    is_duplicate BOOLEAN NOT NULL DEFAULT FALSE,
+    duplicate_of_record_id BIGINT,
+
     reviewed_by TEXT,
     reviewed_at TIMESTAMPTZ,
 
@@ -117,6 +127,14 @@ CREATE TABLE IF NOT EXISTS records (
 
     UNIQUE(source_file, source_page, source_record)
 );
+
+-- CREATE TABLE IF NOT EXISTS is a no-op on a table that already exists (as
+-- confirmed against a real already-initialized local Postgres) -- it will
+-- NOT retroactively add is_duplicate/duplicate_of_record_id to a `records`
+-- table created before this change. These ALTERs make init_db() safe to
+-- rerun against an existing database.
+ALTER TABLE records ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS duplicate_of_record_id BIGINT;
 
 CREATE INDEX IF NOT EXISTS idx_records_status
 ON records(status);
@@ -130,11 +148,20 @@ ON records(ic_baru_suami);
 CREATE INDEX IF NOT EXISTS idx_records_ic_isteri
 ON records(ic_baru_isteri);
 
+CREATE INDEX IF NOT EXISTS idx_records_ic_suami_cerai_rujuk
+ON records(ic_suami);
+
+CREATE INDEX IF NOT EXISTS idx_records_ic_isteri_cerai_rujuk
+ON records(ic_isteri);
+
 CREATE INDEX IF NOT EXISTS idx_records_record_type
 ON records(record_type);
 
 CREATE INDEX IF NOT EXISTS idx_processed_files_status
 ON processed_files(status);
+
+CREATE INDEX IF NOT EXISTS idx_processed_files_file_hash
+ON processed_files(file_hash);
 """
 
 
@@ -389,6 +416,131 @@ def is_file_done(file_path: str) -> bool:
     return bool(row and row["status"] == "DONE")
 
 
+def find_done_file_by_hash(file_hash: str) -> str | None:
+    """Look up an already-DONE file with the same content hash, regardless
+    of its path -- catches the same physical scan re-appearing under a
+    different filename/folder (a re-shared OneDrive link, a copy dropped
+    into two year-folders, ...), which is_file_done()'s exact-path lookup
+    cannot. Returns the original file_path if found, so the caller can skip
+    OCR/Gemini entirely and record why."""
+    if not file_hash:
+        return None
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT file_path
+                FROM processed_files
+                WHERE file_hash = %s AND status = 'DONE'
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (file_hash,),
+            )
+            row = cur.fetchone()
+
+    return row["file_path"] if row else None
+
+
+def find_duplicate_record(
+    *,
+    record_type: str,
+    bil: str | None,
+    ic_a: str | None,
+    ic_b: str | None,
+    exclude_source_file: str,
+    exclude_source_page: int,
+    exclude_source_record: int,
+) -> int | None:
+    """Content-identity dedup: same record_type + Bil + at least one matching
+    IC as an existing, non-duplicate record from a *different* source file.
+    Catches the same real register entry scanned/photographed twice under
+    different filenames, which find_done_file_by_hash's byte-identical check
+    can't (different bytes, same person). Only fires when both Bil and at
+    least one IC are present -- Bil alone repeats too often across different
+    registrar offices/books to be a safe key on its own. Returns the
+    existing record's id, or None.
+    """
+    if not bil or not (ic_a or ic_b):
+        return None
+
+    ic_column_a, ic_column_b = ("ic_suami", "ic_isteri") if record_type != "NIKAH" else ("ic_baru_suami", "ic_baru_isteri")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id
+                FROM records
+                WHERE record_type = %s
+                  AND bil = %s
+                  AND is_duplicate = FALSE
+                  AND ({ic_column_a} = %s OR {ic_column_b} = %s)
+                  AND NOT (source_file = %s AND source_page = %s AND source_record = %s)
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (
+                    record_type,
+                    bil,
+                    ic_a,
+                    ic_b,
+                    exclude_source_file,
+                    exclude_source_page,
+                    exclude_source_record,
+                ),
+            )
+            row = cur.fetchone()
+
+    return int(row["id"]) if row else None
+
+
+def get_existing_record_identity(
+    source_file: str, source_page: Any, source_record: Any
+) -> dict[str, Any] | None:
+    """Look up an existing record row's batch_id and dedup flags, keyed by
+    the same (source_file, source_page, source_record) UNIQUE constraint
+    insert_record()'s ON CONFLICT relies on.
+
+    Used by batch_runner.sync_gemini_batch_results() to update a row with
+    Gemini Batch Mode's merged fields without needing a fake batch_id (a
+    fresh INSERT would need one satisfying the batches FK; an UPDATE via
+    ON CONFLICT does not) and, critically, without wiping out is_duplicate/
+    duplicate_of_record_id -- those are set by batch_runner.run_batch's
+    content-identity dedup check against the *first* insert and are never
+    present in the parsed_record.json/validated_record.json files batch
+    mode reads from disk, so a naive re-insert would silently reset them to
+    their dataclass defaults (False/None).
+
+    source_page/source_record are coerced the same way insert_record()
+    coerces them -- ExtractedRecord.source_record is a string like
+    "record_003" (see pipeline.py), not the plain integer the `records`
+    table's source_record column actually holds, so comparing it as-is
+    would never match any row.
+    """
+    source_page = _coerce_record_number(source_page, default=1)
+    source_record = _coerce_record_number(source_record, default=1)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT batch_id, is_duplicate, duplicate_of_record_id
+                FROM records
+                WHERE source_file = %s AND source_page = %s AND source_record = %s
+                """,
+                (source_file, source_page, source_record),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        return None
+    return {
+        "batch_id": row["batch_id"],
+        "is_duplicate": row["is_duplicate"],
+        "duplicate_of_record_id": row["duplicate_of_record_id"],
+    }
+
+
 def mark_file_done(batch_id: int, file_path: str, file_hash: str):
     now = utcnow()
 
@@ -615,6 +767,9 @@ def insert_record(
                     confidence,
                     validation_errors,
 
+                    is_duplicate,
+                    duplicate_of_record_id,
+
                     created_at,
                     updated_at
                 )
@@ -625,6 +780,7 @@ def insert_record(
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s,
                     %s, %s, %s,
+                    %s, %s,
                     %s, %s
                 )
                 ON CONFLICT (source_file, source_page, source_record)
@@ -656,6 +812,8 @@ def insert_record(
                     status = EXCLUDED.status,
                     confidence = EXCLUDED.confidence,
                     validation_errors = EXCLUDED.validation_errors,
+                    is_duplicate = EXCLUDED.is_duplicate,
+                    duplicate_of_record_id = EXCLUDED.duplicate_of_record_id,
                     updated_at = EXCLUDED.updated_at
                 """,
                 (
@@ -695,6 +853,9 @@ def insert_record(
                     status,
                     record.get("confidence", 0.0),
                     psycopg.types.json.Jsonb(validation_errors),
+
+                    bool(record.get("is_duplicate", False)),
+                    record.get("duplicate_of_record_id"),
 
                     now,
                     now,

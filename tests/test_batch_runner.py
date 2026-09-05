@@ -33,6 +33,8 @@ def test_run_batch_exports_merged_xlsx(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(batch_runner, "create_batch", lambda batch_name, input_path, total_files: 7)
     monkeypatch.setattr(batch_runner, "is_file_done", lambda file_path: False)
     monkeypatch.setattr(batch_runner, "file_sha256", lambda file_path: "hash")
+    monkeypatch.setattr(batch_runner, "find_done_file_by_hash", lambda file_hash: None)
+    monkeypatch.setattr(batch_runner, "find_duplicate_record", lambda **kwargs: None)
     monkeypatch.setattr(batch_runner, "insert_record", lambda **kwargs: None)
     monkeypatch.setattr(batch_runner, "mark_file_done", lambda *args, **kwargs: None)
     monkeypatch.setattr(batch_runner, "mark_file_failed", lambda **kwargs: None)
@@ -82,6 +84,7 @@ def _stub_common(monkeypatch, tmp_path: Path, input_file: Path):
     monkeypatch.setattr(batch_runner, "create_batch", lambda batch_name, input_path, total_files: 7)
     monkeypatch.setattr(batch_runner, "is_file_done", lambda file_path: False)
     monkeypatch.setattr(batch_runner, "file_sha256", lambda file_path: "hash")
+    monkeypatch.setattr(batch_runner, "find_done_file_by_hash", lambda file_hash: None)
     monkeypatch.setattr(batch_runner, "fetch_records_for_batch", lambda batch_id: [])
     # Safety net: if a test's own stubs raise unexpectedly, run_batch's
     # except-block calls mark_file_failed with real args -- fail loudly via
@@ -172,6 +175,87 @@ def test_run_batch_skips_jawi_pages_without_calling_process_input(monkeypatch, t
     assert status == "SKIPPED_JAWI"
     assert kwargs["is_jawi"] is True
     assert kwargs["jawi_proportion"] == 0.97
+
+
+def test_run_batch_skips_files_with_a_matching_content_hash(monkeypatch, tmp_path: Path):
+    input_file = tmp_path / "input" / "reupload.jpg"
+    input_file.parent.mkdir(parents=True)
+    input_file.write_bytes(b"fake-image")
+
+    _stub_common(monkeypatch, tmp_path, input_file)
+    monkeypatch.setattr(batch_runner, "find_done_file_by_hash", lambda file_hash: "original/scan.jpg")
+    monkeypatch.setattr(
+        batch_runner.triage,
+        "classify_file",
+        lambda path, **kwargs: (_ for _ in ()).throw(
+            AssertionError("classify_file must not be called for a hash-duplicate file")
+        ),
+    )
+    monkeypatch.setattr(batch_runner, "process_input", lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("process_input must not be called for a hash-duplicate file")
+    ))
+
+    skip_calls = []
+    monkeypatch.setattr(
+        batch_runner,
+        "mark_file_skipped",
+        lambda batch_id, file_path, status, **kwargs: skip_calls.append((file_path, status, kwargs)),
+    )
+
+    batch_runner.run_batch(
+        input_dir=str(input_file.parent),
+        batch_name="auto_route_duplicate_file",
+        output_dir=str(tmp_path / "batch_output"),
+    )
+
+    assert len(skip_calls) == 1
+    file_path, status, kwargs = skip_calls[0]
+    assert file_path == str(input_file)
+    assert status == "DUPLICATE_FILE"
+    assert "original/scan.jpg" in kwargs["notes"][0]
+
+
+def test_run_batch_flags_content_duplicate_records_before_insert(monkeypatch, tmp_path: Path):
+    input_file = tmp_path / "input" / "sample.jpg"
+    input_file.parent.mkdir(parents=True)
+    input_file.write_bytes(b"fake-image")
+
+    _stub_common(monkeypatch, tmp_path, input_file)
+    monkeypatch.setattr(batch_runner, "mark_file_done", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        batch_runner.triage,
+        "classify_file",
+        lambda path, **kwargs: Classification(
+            doc_type="handwritten", record_type="nikah", layout_variant="legacy",
+            is_jawi=False, jawi_proportion=0.0,
+        ),
+    )
+    monkeypatch.setattr(
+        batch_runner,
+        "process_input",
+        lambda **kwargs: SimpleNamespace(
+            records=[ExtractedRecord(bil="1/2010", ic_baru_suami="740326145837", nama_suami="X")]
+        ),
+    )
+    monkeypatch.setattr(batch_runner, "find_duplicate_record", lambda **kwargs: 99)
+
+    insert_calls = []
+    monkeypatch.setattr(
+        batch_runner,
+        "insert_record",
+        lambda **kwargs: insert_calls.append(kwargs),
+    )
+
+    batch_runner.run_batch(
+        input_dir=str(input_file.parent),
+        batch_name="content_duplicate",
+        output_dir=str(tmp_path / "batch_output"),
+    )
+
+    assert len(insert_calls) == 1
+    inserted_record = insert_calls[0]["record"]
+    assert inserted_record["is_duplicate"] is True
+    assert inserted_record["duplicate_of_record_id"] == 99
 
 
 def test_run_batch_routes_typed_doc_type_to_typed_pipeline(monkeypatch, tmp_path: Path):
@@ -289,3 +373,68 @@ def test_run_batch_routes_typed_cerai_modern_to_its_own_config(monkeypatch, tmp_
 
     assert len(typed_calls) == 1
     assert typed_calls[0]["config_path"] == Path("config/typed_cerai_modern.yaml")
+
+
+def test_sync_gemini_batch_results_updates_matching_rows_and_preserves_dedup_flags(monkeypatch):
+    record = ExtractedRecord(
+        bil="1",
+        nama_suami="AHMAD BIN ALI",
+        source_file="a.jpg",
+        source_page=1,
+        source_record=2,
+        status_review="OK",
+        confidence=0.9,
+    )
+
+    monkeypatch.setattr(
+        batch_runner,
+        "get_existing_record_identity",
+        lambda source_file, source_page, source_record: {
+            "batch_id": 7,
+            "is_duplicate": True,
+            "duplicate_of_record_id": 42,
+        },
+    )
+    insert_calls = []
+    monkeypatch.setattr(
+        batch_runner,
+        "insert_record",
+        lambda **kwargs: insert_calls.append(kwargs),
+    )
+
+    summary = batch_runner.sync_gemini_batch_results([record])
+
+    assert summary == {"synced": 1, "skipped_no_match": []}
+    assert len(insert_calls) == 1
+    call = insert_calls[0]
+    assert call["batch_id"] == 7
+    assert call["source_file"] == "a.jpg"
+    assert call["source_page"] == 1
+    assert call["source_record"] == 2
+    assert call["record"]["is_duplicate"] is True
+    assert call["record"]["duplicate_of_record_id"] == 42
+
+
+def test_sync_gemini_batch_results_skips_records_with_no_matching_db_row(monkeypatch):
+    record = ExtractedRecord(
+        bil="1",
+        source_file="a.jpg",
+        source_page=1,
+        source_record=1,
+    )
+
+    monkeypatch.setattr(
+        batch_runner, "get_existing_record_identity", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        batch_runner,
+        "insert_record",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("insert_record must not be called when there's no matching row")
+        ),
+    )
+
+    summary = batch_runner.sync_gemini_batch_results([record])
+
+    assert summary["synced"] == 0
+    assert summary["skipped_no_match"] == ["a.jpg#1.1"]

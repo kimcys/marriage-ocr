@@ -9,6 +9,9 @@ from marriage_ocr import triage
 from marriage_ocr.db_postgres import (
     create_batch,
     fetch_records_for_batch,
+    find_done_file_by_hash,
+    find_duplicate_record,
+    get_existing_record_identity,
     insert_record,
     is_file_done,
     mark_file_done,
@@ -79,6 +82,61 @@ def normalize_record(record):
     return dict(record)
 
 
+def sync_gemini_batch_results(validated_records) -> dict[str, object]:
+    """Write llm.run_batch_extraction's merged records back into the same
+    `records` table run_batch() populated.
+
+    Gemini Batch Mode (see `marriage-ocr gemini-batch run`) is intentionally
+    a disk-only tool -- it discovers debug artifacts, submits/waits/merges,
+    and overwrites validated_record.json, with no Postgres dependency at
+    all. That's the right shape for a standalone offline re-extraction
+    tool, but it means those merged values never reach the production DB on
+    their own: a real production run is `run_batch(...)` with
+    `llm.enabled: false` (so Gemini is never called synchronously) followed
+    by `gemini-batch run --sync-db`, and without this step the second half
+    of that workflow would silently do nothing to the database the first
+    half populated.
+
+    Matches existing rows by (source_file, source_page, source_record) --
+    the same UNIQUE key insert_record()'s ON CONFLICT relies on -- and
+    preserves each row's existing is_duplicate/duplicate_of_record_id
+    rather than letting insert_record's ON CONFLICT DO UPDATE reset them to
+    the ExtractedRecord dataclass defaults (see
+    get_existing_record_identity's docstring for why).
+    """
+    synced = 0
+    skipped_no_match: list[str] = []
+
+    for record in validated_records:
+        record_dict = normalize_record(record)
+        source_file = record_dict.get("source_file")
+        source_page = record_dict.get("source_page") or 1
+        source_record = record_dict.get("source_record") or 1
+
+        if not source_file:
+            skipped_no_match.append(f"(missing source_file) record {source_record}")
+            continue
+
+        identity = get_existing_record_identity(source_file, source_page, source_record)
+        if identity is None:
+            skipped_no_match.append(f"{source_file}#{source_page}.{source_record}")
+            continue
+
+        record_dict["is_duplicate"] = identity["is_duplicate"]
+        record_dict["duplicate_of_record_id"] = identity["duplicate_of_record_id"]
+
+        insert_record(
+            batch_id=identity["batch_id"],
+            source_file=source_file,
+            source_page=source_page,
+            source_record=source_record,
+            record=record_dict,
+        )
+        synced += 1
+
+    return {"synced": synced, "skipped_no_match": skipped_no_match}
+
+
 def run_batch(
     input_dir: str,
     batch_name: str,
@@ -115,6 +173,18 @@ def run_batch(
 
         try:
             file_hash = file_sha256(file_path_str)
+
+            duplicate_path = find_done_file_by_hash(file_hash)
+            if duplicate_path is not None and duplicate_path != file_path_str:
+                print(f"[SKIPPED_DUPLICATE_FILE] {file_path_str} (same content as {duplicate_path})")
+                mark_file_skipped(
+                    batch_id,
+                    file_path_str,
+                    "DUPLICATE_FILE",
+                    notes=[f"duplicate of {duplicate_path} (identical file hash)"],
+                )
+                continue
+
             classification = None
 
             if config_path is not None:
@@ -191,12 +261,37 @@ def run_batch(
 
             for record_index, record in enumerate(records, start=1):
                 record_dict = normalize_record(record)
+                source_page = record_dict.get("source_page") or 1
+                source_record = record_dict.get("source_record") or record_index
+
+                record_type = str(record_dict.get("record_type") or "NIKAH").upper()
+                ic_a, ic_b = (
+                    (record_dict.get("ic_baru_suami"), record_dict.get("ic_baru_isteri"))
+                    if record_type == "NIKAH"
+                    else (record_dict.get("ic_suami"), record_dict.get("ic_isteri"))
+                )
+                duplicate_of_record_id = find_duplicate_record(
+                    record_type=record_type,
+                    bil=record_dict.get("bil"),
+                    ic_a=ic_a,
+                    ic_b=ic_b,
+                    exclude_source_file=file_path_str,
+                    exclude_source_page=source_page,
+                    exclude_source_record=source_record,
+                )
+                if duplicate_of_record_id is not None:
+                    print(
+                        f"[DUPLICATE_RECORD] {file_path_str} record {record_index} "
+                        f"matches existing record id={duplicate_of_record_id}"
+                    )
+                record_dict["is_duplicate"] = duplicate_of_record_id is not None
+                record_dict["duplicate_of_record_id"] = duplicate_of_record_id
 
                 insert_record(
                     batch_id=batch_id,
                     source_file=file_path_str,
-                    source_page=record_dict.get("source_page") or 1,
-                    source_record=record_dict.get("source_record") or record_index,
+                    source_page=source_page,
+                    source_record=source_record,
                     record=record_dict,
                 )
 
