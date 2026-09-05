@@ -114,6 +114,10 @@ def process_input(
     layout_cfg = cfg.get("layout", {})
     validation_cfg = cfg.get("validation", {})
     llm_cfg = dict(cfg.get("llm", {}))
+    record_type = str(cfg.get("record_type", "nikah")).strip().lower()
+    layout_variant = str(cfg.get("layout_variant", "legacy")).strip().lower()
+    llm_cfg.setdefault("record_type", record_type)
+    llm_cfg.setdefault("layout_variant", layout_variant)
     refinement_settings = FieldRefinementSettings.from_config(cfg)
     validation_input = {
         **validation_cfg,
@@ -124,6 +128,7 @@ def process_input(
     gemini_processor = None if layout_only else _build_gemini_record_processor(
         llm_cfg,
         validation_config=validation_input,
+        record_type=record_type,
     )
     gemini_state: dict[str, bool] = {"disabled": False}
 
@@ -215,10 +220,26 @@ def process_input(
                     saved_records,
                     strict=True,
                 ):
-                    parsed_record = parse_record_ocr_output(
-                        record_output,
-                        include_crop_folder=retain_debug_artifacts,
-                    )
+                    if record_type == "nikah":
+                        parsed_record = parse_record_ocr_output(
+                            record_output,
+                            include_crop_folder=retain_debug_artifacts,
+                        )
+                    else:
+                        # parse_record_ocr_output is a deterministic regex
+                        # parser built only for Nikah's field shapes (wali,
+                        # saksi, mas_kahwin, split old/new IC, ...). Running
+                        # it against Cerai/Rujuk cell text doesn't fail
+                        # loudly -- it silently produces wrong values (e.g.
+                        # spilling header text into nama_isteri) and Nikah-
+                        # shaped review reasons (wali_name_missing on a
+                        # Rujuk record) that merge_parser_and_gemini would
+                        # otherwise inherit verbatim. Until a real Cerai/
+                        # Rujuk deterministic parser exists, Gemini is the
+                        # sole extractor for these types -- start from a
+                        # blank record so every field is a clean "Gemini
+                        # fills it" case instead of manufactured noise.
+                        parsed_record = _blank_parsed_record(record_output, retain_debug_artifacts)
                     refined_record = parsed_record
                     record_refinement_rows: list[FieldRefinementAuditRow] = []
                     if ocr_engine is not None and refinement_settings.enabled:
@@ -254,6 +275,7 @@ def process_input(
                         logger=logger,
                         source_file=str(page.relative_source),
                         source_page=page.source_page,
+                        record_type=record_type,
                     )
                     validated_record = replace(
                         validated_record,
@@ -426,6 +448,19 @@ def process_input(
     if temp_debug_workspace is not None:
         temp_debug_workspace.cleanup()
     return result
+
+
+def _blank_parsed_record(record_output: Any, include_crop_folder: bool) -> ExtractedRecord:
+    raw_json_text = None
+    if record_output.raw_json_path is not None and record_output.raw_json_path.exists():
+        raw_json_text = record_output.raw_json_path.read_text(encoding="utf-8")
+
+    return ExtractedRecord(
+        source_record=f"record_{record_output.record_index:03d}",
+        crop_folder=str(record_output.record_dir) if include_crop_folder else None,
+        raw_ocr_json=raw_json_text,
+        status_review="REVIEW",
+    )
 
 
 def _emit_progress(
@@ -613,6 +648,7 @@ def _build_gemini_record_processor(
     llm_config: Mapping[str, Any],
     *,
     validation_config: Mapping[str, Any],
+    record_type: str = "nikah",
 ) -> Callable[[ExtractedRecord, Any], ExtractedRecord] | None:
     if not bool(llm_config.get("enabled", False)):
         return None
@@ -646,6 +682,7 @@ def _build_gemini_record_processor(
             layout_confidence=layout_confidence,
             prefer_gemini_threshold=prefer_gemini_threshold,
             review_below_field_confidence=review_below_field_confidence,
+            record_type=record_type,
         )
 
     return _process
@@ -662,6 +699,7 @@ def _validate_record_with_optional_gemini(
     logger: Any,
     source_file: str,
     source_page: int,
+    record_type: str = "nikah",
 ) -> ExtractedRecord:
     if gemini_processor is None or (gemini_state is not None and gemini_state.get("disabled", False)):
         return validate_record(
@@ -669,6 +707,7 @@ def _validate_record_with_optional_gemini(
             record_output.cell_results,
             validation_config,
             layout_confidence=layout_confidence,
+            record_type=record_type,
         )
 
     try:
@@ -689,6 +728,7 @@ def _validate_record_with_optional_gemini(
             record_output.cell_results,
             validation_config,
             layout_confidence=layout_confidence,
+            record_type=record_type,
         )
         fallback_reason = f"Gemini unavailable: {error.__class__.__name__}"
         review_reason = list(validated_record.review_reason or [])

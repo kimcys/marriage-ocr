@@ -68,3 +68,35 @@ def test_gemini_filled_non_critical_field_does_not_force_review() -> None:
 
     assert merged.remarks == "Diambil oleh suami"
     assert not any("no parser corroboration" in reason for reason in merged.review_reason)
+
+
+def test_merge_cerai_uses_cerai_critical_fields_and_tags_record_type() -> None:
+    # Regression: before record_type-aware merge fields existed, Cerai's
+    # tarikh_cerai wasn't recognized as critical (it isn't in Nikah's
+    # CRITICAL_FIELDS), so a Gemini-only value for it never forced review.
+    parser_record = ExtractedRecord(
+        nama_suami="ABDULLAH B. ABD HAMID",
+        nama_isteri="ZUBAIDAH BTE YAHYA",
+        tarikh_cerai=None,
+    )
+    gemini_record = ExtractedRecord(
+        nama_suami="ABDULLAH B. ABD HAMID",
+        nama_isteri="ZUBAIDAH BTE YAHYA",
+        tarikh_cerai="1997-01-21",
+    )
+    gemini_result = GeminiRecordResult(
+        record=gemini_record,
+        field_confidence={"tarikh_cerai": 0.95},
+    )
+
+    merged = merge_parser_and_gemini(
+        parser_record=parser_record,
+        gemini_result=gemini_result,
+        cell_results=_cell_results(),
+        validation_config={"require_tarikh_cerai": False},
+        record_type="cerai",
+    )
+
+    assert merged.tarikh_cerai == "1997-01-21"
+    assert merged.record_type == "CERAI"
+    assert any("no parser corroboration" in reason for reason in merged.review_reason)

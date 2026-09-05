@@ -215,6 +215,10 @@ def run_ocr_on_record_crops(
     for record in records:
         cell_results: dict[str, OcrResult] = {}
         for cell_name, cell_path in record.cell_paths.items():
+            # Signatures are not useful OCR fields and often pollute nearby
+            # dates -- same reasoning as run_ocr_on_page_layout below.
+            if cell_name == "tandatangan":
+                continue
             cell_results[cell_name] = engine.read_image(cell_path)
 
         raw_json_path: Path | None = None

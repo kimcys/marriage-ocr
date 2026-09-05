@@ -1,4 +1,4 @@
-from marriage_ocr.models import OcrResult
+from marriage_ocr.models import ExtractedRecord, OcrResult
 from marriage_ocr.parser import parse_record_ocr
 from marriage_ocr.validation import (
     is_suspicious_ic,
@@ -122,3 +122,113 @@ def test_validation_flags_suspicious_all_identical_digit_ic() -> None:
 
     assert "suspicious wife IC (implausible digits)" in validated.review_reason
     assert validated.status_review != "OK"
+
+
+CERAI_CELL_RESULTS = {
+    "bil": OcrResult(text="1/97", average_confidence=0.95),
+    "suami_isteri": OcrResult(text="ABDULLAH B. ABD HAMID\nZUBAIDAH BTE YAHYA", average_confidence=0.9),
+}
+
+RUJUK_CELL_RESULTS = {
+    "bil": OcrResult(text="1/90", average_confidence=0.95),
+    "suami_isteri": OcrResult(text="RAZALI BIN HARUN\nSARIMAH BT. MOHD AMIN", average_confidence=0.9),
+}
+
+
+def test_validate_record_cerai_ok_with_valid_ic_and_date() -> None:
+    record = ExtractedRecord(
+        record_type="CERAI",
+        bil="1/97",
+        nama_suami="ABDULLAH B. ABD HAMID",
+        ic_suami="A0394566",
+        nama_isteri="ZUBAIDAH BTE YAHYA",
+        ic_isteri="A0287541",
+        tarikh_cerai="1997-01-21",
+    )
+
+    validated = validate_record(
+        record,
+        CERAI_CELL_RESULTS,
+        VALIDATION_CONFIG,
+        layout_confidence=1.0,
+        record_type="cerai",
+    )
+
+    assert validated.status_review == "OK"
+    assert validated.record_type == "CERAI"
+    # Nikah-only fields (mas_kahwin, wali, saksi) must not be scored for Cerai.
+    assert "missing mas kahwin" not in validated.review_reason
+    assert "missing wali name" not in validated.review_reason
+
+
+def test_validate_record_cerai_requires_tarikh_cerai() -> None:
+    record = ExtractedRecord(
+        record_type="CERAI",
+        bil="1/97",
+        nama_suami="ABDULLAH B. ABD HAMID",
+        ic_suami="A0394566",
+        nama_isteri="ZUBAIDAH BTE YAHYA",
+        ic_isteri="A0287541",
+        tarikh_cerai=None,
+    )
+
+    validated = validate_record(
+        record,
+        CERAI_CELL_RESULTS,
+        VALIDATION_CONFIG,
+        layout_confidence=1.0,
+        record_type="cerai",
+    )
+
+    assert validated.status_review == "REVIEW"
+    assert "invalid or missing cerai date" in validated.review_reason
+
+
+def test_validate_record_rujuk_ok_without_ages_present() -> None:
+    # Ages are only on the legacy layout -- the modern layout genuinely
+    # omits them and must not be penalized for that.
+    record = ExtractedRecord(
+        record_type="RUJUK",
+        bil="1/90",
+        nama_suami="RAZALI BIN HARUN",
+        ic_suami="6200510",
+        nama_isteri="SARIMAH BT. MOHD AMIN",
+        ic_isteri="6042214",
+        tarikh_rujuk="1990-01-04",
+        umur_suami=None,
+        umur_isteri=None,
+    )
+
+    validated = validate_record(
+        record,
+        RUJUK_CELL_RESULTS,
+        VALIDATION_CONFIG,
+        layout_confidence=1.0,
+        record_type="rujuk",
+    )
+
+    assert validated.status_review == "OK"
+    assert validated.record_type == "RUJUK"
+
+
+def test_validate_record_rujuk_flags_implausible_age_when_present() -> None:
+    record = ExtractedRecord(
+        record_type="RUJUK",
+        bil="1/90",
+        nama_suami="RAZALI BIN HARUN",
+        ic_suami="6200510",
+        nama_isteri="SARIMAH BT. MOHD AMIN",
+        ic_isteri="6042214",
+        tarikh_rujuk="1990-01-04",
+        umur_suami=5,
+    )
+
+    validated = validate_record(
+        record,
+        RUJUK_CELL_RESULTS,
+        VALIDATION_CONFIG,
+        layout_confidence=1.0,
+        record_type="rujuk",
+    )
+
+    assert "invalid husband age" in validated.review_reason

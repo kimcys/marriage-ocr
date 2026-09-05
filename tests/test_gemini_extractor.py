@@ -333,6 +333,57 @@ def test_parse_response_text_recovers_truncated_string_field() -> None:
     assert payload["id_isteri_raw"] == "A.1857"
 
 
+def test_build_prompt_dispatches_to_record_schemas_for_cerai() -> None:
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+    extractor.config = {}
+    extractor.record_type = "cerai"
+    extractor.layout_variant = "modern"
+
+    prompt = GeminiRecordExtractor._build_prompt(
+        extractor,
+        {"bil": OcrResult(text="1585", average_confidence=0.9)},
+    )
+
+    assert "Daftar Perceraian Orang Islam" in prompt
+    assert "NEWER, more compact ledger layout" in prompt
+    assert "BIL.DAFTAR" in prompt
+
+
+def test_response_schema_selects_cerai_schema() -> None:
+    from llm import record_schemas
+
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+    extractor.record_type = "rujuk"
+
+    assert GeminiRecordExtractor._response_schema(extractor) is record_schemas.RUJUK_SCHEMA
+
+
+def test_generic_payload_to_result_builds_record_from_schema_fields() -> None:
+    extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
+    extractor.record_type = "cerai"
+
+    result = GeminiRecordExtractor._payload_to_result(
+        extractor,
+        {
+            "bil": "1/97",
+            "nama_suami": "abdullah b. abd hamid",
+            "ic_suami": "A0394566",
+            "tarikh_cerai": "1997-01-21",
+            "field_confidence": [{"field": "tarikh_cerai", "confidence": 0.9}],
+            "uncertain_fields": [],
+            "notes": [],
+        },
+    )
+
+    assert result.record.record_type == "CERAI"
+    assert result.record.bil == "1/97"
+    assert result.record.nama_suami == "ABDULLAH B. ABD HAMID"
+    assert result.record.ic_suami == "A0394566"
+    assert result.record.tarikh_cerai == "1997-01-21"
+    # Nikah-only field must not leak onto a Cerai record.
+    assert result.record.mas_kahwin is None
+
+
 def test_parse_response_text_drops_dangling_trailing_field() -> None:
     extractor = GeminiRecordExtractor.__new__(GeminiRecordExtractor)
 

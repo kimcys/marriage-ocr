@@ -38,6 +38,7 @@ def test_build_gemini_record_processor_uses_full_record_and_merge(monkeypatch, t
         layout_confidence,
         prefer_gemini_threshold,
         review_below_field_confidence,
+        record_type="nikah",
     ):
         calls["merge"] = {
             "parser_record": parser_record,
@@ -47,6 +48,7 @@ def test_build_gemini_record_processor_uses_full_record_and_merge(monkeypatch, t
             "layout_confidence": layout_confidence,
             "prefer_gemini_threshold": prefer_gemini_threshold,
             "review_below_field_confidence": review_below_field_confidence,
+            "record_type": record_type,
         }
         return ExtractedRecord(
             bil="1",

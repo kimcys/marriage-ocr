@@ -83,11 +83,11 @@ def test_exporter_can_show_public_columns_only(tmp_path: Path) -> None:
 
     assert summary.written_count == 1
     assert [worksheet.cell(row=1, column=index + 1).value for index in range(len(PUBLIC_XLSX_COLUMNS))] == PUBLIC_XLSX_COLUMNS
-    assert worksheet.column_dimensions["X"].hidden is True
+    assert worksheet.column_dimensions["Y"].hidden is True
     assert worksheet.column_dimensions["A"].hidden is False
     expected_hidden = [column for column in XLSX_COLUMNS if column not in PUBLIC_XLSX_COLUMNS]
     assert worksheet.max_column == len(PUBLIC_XLSX_COLUMNS) + len(expected_hidden)
-    assert worksheet["X1"].value == "ID Suami Raw"
+    assert worksheet["Y1"].value == "ID Suami Raw"
 
 
 def test_exporter_skips_duplicates_on_rerun(tmp_path: Path) -> None:

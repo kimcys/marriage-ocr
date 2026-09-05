@@ -9,18 +9,6 @@ from marriage_ocr.layout import Box, TableLayout
 from marriage_ocr.ocr import RecordCropPaths
 
 
-DEBUG_CELL_ORDER = [
-    "bil",
-    "suami_isteri",
-    "pendaftar",
-    "wali",
-    "hubungan_wali",
-    "saksi",
-    "tarikh_nikah",
-    "tarikh_keluar",
-    "remarks",
-]
-
 CELL_CROP_PADDING = 12
 
 
@@ -47,7 +35,7 @@ def save_record_crops(
         write_image(full_record_path, processed_color[record_rows, record_columns])
         cell_paths: dict[str, Path] = {}
 
-        for cell_name in DEBUG_CELL_ORDER:
+        for cell_name in layout.column_order:
             cell_box = record.cells.get(cell_name)
             if cell_box is None:
                 continue

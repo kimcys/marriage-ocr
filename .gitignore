@@ -20,3 +20,9 @@ data/typed_acceptance_ground_truth.csv
 .env
 .env.*
 !.env.example
+
+# Google Cloud service-account credentials (Console downloads this pattern:
+# <project-id>-<random-hex>.json)
+marrige-ocr-67d8deb16ffd.json
+*-????????????.json
+service-account*.json

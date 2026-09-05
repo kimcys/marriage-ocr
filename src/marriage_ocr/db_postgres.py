@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS records (
     source_page INTEGER DEFAULT 1,
     source_record INTEGER DEFAULT 1,
 
+    -- NIKAH / CERAI / RUJUK. Everything below is one wide nullable-column
+    -- table across all three record types, matching how the source Excel
+    -- template represents them (one sheet, one Kategori column) -- see
+    -- src/llm/record_schemas.py for the real ledger samples these columns
+    -- are grounded in. This folds in what used to be a separate
+    -- migration_add_cerai_rujuk.sql; that file is now historical reference
+    -- only, since there was no deployed DB to migrate.
+    record_type TEXT NOT NULL DEFAULT 'NIKAH'
+        CHECK (record_type IN ('NIKAH', 'CERAI', 'RUJUK')),
+    layout_variant TEXT,
+
     bil TEXT,
     nama_suami TEXT,
     ic_baru_suami TEXT,
@@ -62,6 +73,23 @@ CREATE TABLE IF NOT EXISTS records (
     tarikh_nikah TEXT,
     mas_kahwin TEXT,
     wali TEXT,
+
+    -- Cerai/Rujuk-specific flat columns, populated from raw_record for
+    -- querying/reporting; the full record (all fields, all types) always
+    -- round-trips through raw_record JSONB regardless of what's flattened
+    -- here.
+    no_rujukan TEXT,
+    no_siri TEXT,
+    tarikh_daftar TEXT,
+    ic_suami TEXT,
+    ic_isteri TEXT,
+    tempat_cerai TEXT,
+    keadaan_talak TEXT,
+    tarikh_cerai TEXT,
+    tempat_rujuk TEXT,
+    bil_cerai TEXT,
+    tarikh_rujuk TEXT,
+    hal_hal_lain TEXT,
 
     raw_record JSONB,
     raw_ocr JSONB,
@@ -90,6 +118,9 @@ ON records(ic_baru_suami);
 
 CREATE INDEX IF NOT EXISTS idx_records_ic_isteri
 ON records(ic_baru_isteri);
+
+CREATE INDEX IF NOT EXISTS idx_records_record_type
+ON records(record_type);
 
 CREATE INDEX IF NOT EXISTS idx_processed_files_status
 ON processed_files(status);
@@ -474,6 +505,9 @@ def insert_record(
                     source_page,
                     source_record,
 
+                    record_type,
+                    layout_variant,
+
                     bil,
                     nama_suami,
                     ic_baru_suami,
@@ -482,6 +516,19 @@ def insert_record(
                     tarikh_nikah,
                     mas_kahwin,
                     wali,
+
+                    no_rujukan,
+                    no_siri,
+                    tarikh_daftar,
+                    ic_suami,
+                    ic_isteri,
+                    tempat_cerai,
+                    keadaan_talak,
+                    tarikh_cerai,
+                    tempat_rujuk,
+                    bil_cerai,
+                    tarikh_rujuk,
+                    hal_hal_lain,
 
                     raw_record,
                     raw_ocr,
@@ -495,13 +542,17 @@ def insert_record(
                 )
                 VALUES (
                     %s, %s, %s, %s,
+                    %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s,
                     %s, %s, %s,
                     %s, %s
                 )
                 ON CONFLICT (source_file, source_page, source_record)
                 DO UPDATE SET
+                    record_type = EXCLUDED.record_type,
+                    layout_variant = EXCLUDED.layout_variant,
                     bil = EXCLUDED.bil,
                     nama_suami = EXCLUDED.nama_suami,
                     ic_baru_suami = EXCLUDED.ic_baru_suami,
@@ -510,6 +561,18 @@ def insert_record(
                     tarikh_nikah = EXCLUDED.tarikh_nikah,
                     mas_kahwin = EXCLUDED.mas_kahwin,
                     wali = EXCLUDED.wali,
+                    no_rujukan = EXCLUDED.no_rujukan,
+                    no_siri = EXCLUDED.no_siri,
+                    tarikh_daftar = EXCLUDED.tarikh_daftar,
+                    ic_suami = EXCLUDED.ic_suami,
+                    ic_isteri = EXCLUDED.ic_isteri,
+                    tempat_cerai = EXCLUDED.tempat_cerai,
+                    keadaan_talak = EXCLUDED.keadaan_talak,
+                    tarikh_cerai = EXCLUDED.tarikh_cerai,
+                    tempat_rujuk = EXCLUDED.tempat_rujuk,
+                    bil_cerai = EXCLUDED.bil_cerai,
+                    tarikh_rujuk = EXCLUDED.tarikh_rujuk,
+                    hal_hal_lain = EXCLUDED.hal_hal_lain,
                     raw_record = EXCLUDED.raw_record,
                     raw_ocr = EXCLUDED.raw_ocr,
                     status = EXCLUDED.status,
@@ -523,6 +586,9 @@ def insert_record(
                     source_page,
                     source_record,
 
+                    record.get("record_type") or "NIKAH",
+                    record.get("layout_variant"),
+
                     record.get("bil"),
                     record.get("nama_suami"),
                     record.get("ic_baru_suami"),
@@ -531,6 +597,19 @@ def insert_record(
                     record.get("tarikh_nikah"),
                     record.get("mas_kahwin"),
                     record.get("wali"),
+
+                    record.get("no_rujukan"),
+                    record.get("no_siri"),
+                    record.get("tarikh_daftar"),
+                    record.get("ic_suami"),
+                    record.get("ic_isteri"),
+                    record.get("tempat_cerai"),
+                    record.get("keadaan_talak"),
+                    record.get("tarikh_cerai"),
+                    record.get("tempat_rujuk"),
+                    record.get("bil_cerai"),
+                    record.get("tarikh_rujuk"),
+                    record.get("hal_hal_lain"),
 
                     psycopg.types.json.Jsonb(record),
                     psycopg.types.json.Jsonb(raw_ocr),

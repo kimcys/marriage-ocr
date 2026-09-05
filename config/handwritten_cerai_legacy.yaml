@@ -2,7 +2,7 @@ project:
   name: marriage-ocr
   environment: handwritten
 
-record_type: NIKAH
+record_type: CERAI
 layout_variant: legacy
 
 input:
@@ -29,20 +29,29 @@ preprocessing:
   hough_min_line_length_ratio: 0.35
   hough_max_line_gap: 20
 
+# NOT YET CALIBRATED against real images -- these are placeholder ratios,
+# evenly covering the 10 columns seen on input/cerai/image00001-4.jpg and
+# input/cerai/image00002.jpg (1997/2009 legacy layout: Bil, Nama Bekas Suami
+# dan Isteri, Tempat Cerai, Pendaftar, Keadaan Talak, Jumlah, Tarikh Cerai,
+# Tandatangan, Tarikh Keluar, Hal-Hal Lain). Run
+# `marriage-ocr process --layout-only --input input/cerai --config
+# config/handwritten_cerai_legacy.yaml --debug debug/cerai_legacy` and
+# adjust these against the generated table_lines_overlay.jpg /
+# record_boxes_overlay.jpg before trusting cell crops from this config.
 layout:
   auto_detect_table: true
   auto_detect_columns: true
   fallback_column_ratios:
-    bil: [0.00, 0.08]
-    suami_isteri: [0.08, 0.25]
-    pendaftar: [0.25, 0.43]
-    wali: [0.43, 0.50]
-    hubungan_wali: [0.50, 0.58]
-    saksi: [0.58, 0.70]
-    tarikh_nikah: [0.70, 0.77]
-    tandatangan: [0.77, 0.84]
-    tarikh_keluar: [0.84, 0.91]
-    remarks: [0.91, 1.00]
+    bil: [0.00, 0.10]
+    suami_isteri: [0.10, 0.24]
+    tempat_cerai: [0.24, 0.31]
+    pendaftar: [0.31, 0.385]
+    keadaan_talak: [0.385, 0.505]
+    jumlah: [0.505, 0.6075]
+    tarikh_cerai: [0.6075, 0.695]
+    tandatangan: [0.695, 0.8425]
+    tarikh_keluar: [0.8425, 0.915]
+    hal_hal_lain: [0.915, 1.00]
   min_record_height_px: 80
   max_record_height_px: 280
 
@@ -52,14 +61,7 @@ ocr:
   min_average_confidence: 0.50
   save_raw_json: true
   field_refinement:
-    enabled: true
-    retry_names: true
-    retry_ic_numbers: true
-    retry_dates: true
-    max_variants_per_field: 4
-    minimum_candidate_score: 0.65
-    minimum_score_improvement: 0.05
-    save_retry_images: false
+    enabled: false
   google_vision:
     language_hints:
       - ms
@@ -76,7 +78,6 @@ llm:
   enabled: true
   provider: gemini
   model: gemini-3.1-pro-preview
-  prompt_mode: handwritten_aggressive
   temperature: 0.0
   max_output_tokens: 4096
   save_raw_json: true
@@ -90,8 +91,7 @@ validation:
   ok_confidence_threshold: 0.85
   min_age: 15
   max_age: 100
-  require_mas_kahwin: true
-  require_tarikh_nikah: true
+  require_tarikh_cerai: true
 
 export:
   append: true
@@ -100,31 +100,31 @@ export:
   include_debug_paths: false
   include_raw_columns: false
   columns:
+    - Record Type
     - Bil
+    - No Rujukan
+    - No Siri
+    - Tarikh Daftar
     - Nama Suami
-    - IC Lama Suami
-    - IC Baru Suami
-    - Umur Suami
+    - IC Suami
     - Nama Isteri
-    - IC Lama Isteri
-    - IC Baru Isteri
-    - Umur Isteri
-    - Mas Kahwin
+    - IC Isteri
+    - Tempat Cerai
     - Nama Pendaftar
-    - Alamat Pendaftar
-    - Nama Wali
-    - Hubungan Wali
-    - Saksi 1
-    - Saksi 2
+    - Keadaan Talak
+    - Jumlah Talak
     - Tarikh Nikah
+    - Tarikh Cerai
+    - Bil Daftar Rujukan
     - Tarikh Keluar
-    - Remarks
+    - Catatan Raw
+    - Hal Hal Lain
     - Confidence
     - Status
 
 review:
   reviewer_name: handwritten-reviewer
-  export_path: data/reviewed_exports/handwritten_reviewed.xlsx
+  export_path: data/reviewed_exports/handwritten_cerai_legacy_reviewed.xlsx
 
 training_export:
   output_dir: data/ground_truth

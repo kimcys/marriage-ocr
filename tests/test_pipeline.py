@@ -238,7 +238,7 @@ def _configure_process(
             lambda *args, **kwargs: validate_impl,
         )
     else:
-        def fake_validate(record, cell_results, validation_config, *, layout_confidence=1.0, layout_ok=True):
+        def fake_validate(record, cell_results, validation_config, *, layout_confidence=1.0, layout_ok=True, record_type="nikah"):
             validate_inputs.append(record)
             if validate_impl is not None:
                 return validate_impl(record, cell_results, validation_config, layout_confidence=layout_confidence, layout_ok=layout_ok)

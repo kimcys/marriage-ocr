@@ -15,6 +15,8 @@ from google.genai import errors as genai_errors
 
 from marriage_ocr.models import ExtractedRecord, OcrResult
 
+from . import record_schemas
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,9 +48,13 @@ class GeminiRecordExtractor:
     _initial_delay_seconds = 0.0
     _backoff_multiplier = 2.0
     _request_timeout_seconds = 60.0
+    record_type = "nikah"
+    layout_variant = "legacy"
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         self.config = dict(config or {})
+        self.record_type = str(self.config.get("record_type", "nikah")).strip().lower()
+        self.layout_variant = str(self.config.get("layout_variant", "legacy")).strip().lower()
         self.model = str(self.config.get("model", "gemini-2.5-flash"))
         self.temperature = float(self.config.get("temperature", 0.0))
         self.max_output_tokens = int(self.config.get("max_output_tokens", 4096))
@@ -115,7 +121,7 @@ class GeminiRecordExtractor:
             temperature=self.temperature,
             max_output_tokens=self.max_output_tokens,
             response_mime_type="application/json",
-            response_schema=GEMINI_RECORD_SCHEMA,
+            response_schema=self._response_schema(),
             http_options=self._types.HttpOptions(timeout=int(self._request_timeout_seconds * 1000)),
         )
         delay = self._initial_delay_seconds
@@ -132,6 +138,11 @@ class GeminiRecordExtractor:
                 time.sleep(delay)
                 delay *= self._backoff_multiplier
         raise AssertionError("Gemini retry loop exhausted unexpectedly")
+
+    def _response_schema(self) -> dict[str, Any]:
+        if self.record_type == "nikah":
+            return GEMINI_RECORD_SCHEMA
+        return record_schemas.RECORD_TYPES[self.record_type]["schema"]
 
     def _extract_response_payload(self, response: Any) -> dict[str, Any]:
         parsed = getattr(response, "parsed", None)
@@ -151,6 +162,13 @@ class GeminiRecordExtractor:
             }
             for name, result in ocr_cells.items()
         }
+
+        if self.record_type != "nikah":
+            builder = record_schemas.RECORD_TYPES[self.record_type]["prompt_builder"]
+            return builder(
+                json.dumps(cell_hints, ensure_ascii=False, indent=2),
+                layout_variant=self.layout_variant,
+            )
 
         prompt_mode = str(self.config.get("prompt_mode", "")).strip().lower()
         if prompt_mode == "handwritten_aggressive":
@@ -232,6 +250,9 @@ Google Vision OCR cell hints:
         return payload
 
     def _payload_to_result(self, payload: Mapping[str, Any]) -> GeminiRecordResult:
+        if self.record_type != "nikah":
+            return self._generic_payload_to_result(payload)
+
         record = ExtractedRecord(
             bil=_clean_str(payload.get("bil")),
             nama_suami=_clean_name(payload.get("nama_suami")),
@@ -258,6 +279,48 @@ Google Vision OCR cell hints:
             tarikh_keluar_raw=_clean_str(payload.get("tarikh_keluar_raw")),
             remarks=_clean_str(payload.get("remarks")),
         )
+
+        field_confidence = _normalize_field_confidence(payload.get("field_confidence"))
+        uncertain_fields = [str(v) for v in payload.get("uncertain_fields") or []]
+        notes = [str(v) for v in payload.get("notes") or []]
+
+        if field_confidence:
+            record.confidence = round(mean(field_confidence.values()), 4)
+
+        return GeminiRecordResult(
+            record=record,
+            field_confidence=field_confidence,
+            uncertain_fields=uncertain_fields,
+            notes=notes,
+            raw_response=dict(payload),
+        )
+
+    _NAME_FIELDS = frozenset({"nama_suami", "nama_isteri", "nama_pendaftar"})
+
+    def _generic_payload_to_result(self, payload: Mapping[str, Any]) -> GeminiRecordResult:
+        """Build an ExtractedRecord straight from the selected schema's properties.
+
+        Unlike the hardcoded Nikah mapping above, Cerai/Rujuk field sets are
+        plain str/int passthroughs (see record_schemas.py) with no
+        relation-style cleanup needed, so one schema-driven loop covers both
+        without hardcoding each field name here too.
+        """
+        properties: Mapping[str, Any] = record_schemas.RECORD_TYPES[self.record_type]["schema"]["properties"]
+        meta_keys = {"field_confidence", "uncertain_fields", "notes"}
+
+        values: dict[str, Any] = {"record_type": self.record_type.upper()}
+        for field_name, field_schema in properties.items():
+            if field_name in meta_keys:
+                continue
+            raw_value = payload.get(field_name)
+            if field_schema.get("type") == "INTEGER":
+                values[field_name] = _clean_int(raw_value)
+            elif field_name in self._NAME_FIELDS:
+                values[field_name] = _clean_name(raw_value)
+            else:
+                values[field_name] = _clean_str(raw_value)
+
+        record = ExtractedRecord(**values)
 
         field_confidence = _normalize_field_confidence(payload.get("field_confidence"))
         uncertain_fields = [str(v) for v in payload.get("uncertain_fields") or []]

@@ -7,6 +7,7 @@ import sys
 from typing import Any
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 
 from marriage_ocr.config import LoadedConfig, load_runtime_config
@@ -25,6 +26,19 @@ def load_config(path: Path) -> dict[str, Any]:
 
 def _load_command_runtime(command_name: str, config_path: Path) -> tuple[dict[str, Any], LoadedConfig, LoggingRuntime]:
     loaded = load_runtime_config(config_path)
+    # load_runtime_config's own .env parsing only ever feeds the
+    # MARRIAGE_OCR_*-prefixed override mechanism into `loaded.data` -- it
+    # never touches the real process environment. Anything read directly via
+    # os.getenv() elsewhere (GEMINI_API_KEY in gemini_extractor.py,
+    # GOOGLE_APPLICATION_CREDENTIALS for the Vision client) would otherwise
+    # silently stay unset for every CLI command here, even with a correctly
+    # filled-in .env file. db_postgres.py already gets this for free via its
+    # own load_dotenv() call, but only when something imports it (e.g.
+    # batch_runner) -- `process`/`process-typed` do not. override=False
+    # keeps real environment variables (e.g. from a parent shell) winning
+    # over .env, matching load_runtime_config's own MARRIAGE_OCR_* precedence.
+    if loaded.env_file is not None:
+        load_dotenv(loaded.env_file, override=False)
     runtime = setup_logging(command_name, loaded.data.get("logging", {}))
     logger = get_logger(f"marriage_ocr.{command_name}")
     logger.info("Loaded configuration from %s", config_path)

@@ -2,8 +2,8 @@ project:
   name: marriage-ocr
   environment: handwritten
 
-record_type: NIKAH
-layout_variant: legacy
+record_type: RUJUK
+layout_variant: modern
 
 input:
   allowed_extensions:
@@ -29,22 +29,31 @@ preprocessing:
   hough_min_line_length_ratio: 0.35
   hough_max_line_gap: 20
 
+# NOT YET CALIBRATED against real images -- placeholder ratios covering the
+# 5 columns seen on input/rujuk/image00002-3.jpg (2024 modern layout: Bil
+# Daftar/Tarikh Daftar/No.Siri, Nama+IC, Tarikh Rujuk, Tandatangan+Tarikh
+# Keluar, Catatan). Run `marriage-ocr process --layout-only --input
+# input/rujuk --config config/handwritten_rujuk_modern.yaml --debug
+# debug/rujuk_modern` and adjust these against the generated
+# table_lines_overlay.jpg / record_boxes_overlay.jpg before trusting cell
+# crops from this config.
 layout:
   auto_detect_table: true
   auto_detect_columns: true
   fallback_column_ratios:
-    bil: [0.00, 0.08]
-    suami_isteri: [0.08, 0.25]
-    pendaftar: [0.25, 0.43]
-    wali: [0.43, 0.50]
-    hubungan_wali: [0.50, 0.58]
-    saksi: [0.58, 0.70]
-    tarikh_nikah: [0.70, 0.77]
-    tandatangan: [0.77, 0.84]
-    tarikh_keluar: [0.84, 0.91]
-    remarks: [0.91, 1.00]
-  min_record_height_px: 80
-  max_record_height_px: 280
+    bil: [0.00, 0.14]
+    suami_isteri: [0.14, 0.50]
+    tarikh_rujuk: [0.50, 0.61]
+    tandatangan: [0.61, 0.73]
+    catatan: [0.73, 1.00]
+  # The modern layout allots ~9 blank ruled rows per entry (vs. the legacy
+  # layout's tightly-packed 80-280px rows) -- measured ~825px between two
+  # real Bil markers on input/rujuk/image00002-3.jpg. The original
+  # handwritten.yaml-derived 80/280 values caused _detect_record_boxes to
+  # heavily penalize (and reject) the correctly-sized box, merging two real
+  # entries into one and stranding an empty phantom record below them.
+  min_record_height_px: 100
+  max_record_height_px: 1000
 
 ocr:
   engine: google_vision
@@ -52,14 +61,7 @@ ocr:
   min_average_confidence: 0.50
   save_raw_json: true
   field_refinement:
-    enabled: true
-    retry_names: true
-    retry_ic_numbers: true
-    retry_dates: true
-    max_variants_per_field: 4
-    minimum_candidate_score: 0.65
-    minimum_score_improvement: 0.05
-    save_retry_images: false
+    enabled: false
   google_vision:
     language_hints:
       - ms
@@ -76,7 +78,6 @@ llm:
   enabled: true
   provider: gemini
   model: gemini-3.1-pro-preview
-  prompt_mode: handwritten_aggressive
   temperature: 0.0
   max_output_tokens: 4096
   save_raw_json: true
@@ -90,8 +91,7 @@ validation:
   ok_confidence_threshold: 0.85
   min_age: 15
   max_age: 100
-  require_mas_kahwin: true
-  require_tarikh_nikah: true
+  require_tarikh_rujuk: true
 
 export:
   append: true
@@ -100,31 +100,33 @@ export:
   include_debug_paths: false
   include_raw_columns: false
   columns:
+    - Record Type
     - Bil
+    - No Rujukan
+    - No Siri
+    - Tarikh Daftar
     - Nama Suami
-    - IC Lama Suami
-    - IC Baru Suami
     - Umur Suami
+    - IC Suami
     - Nama Isteri
-    - IC Lama Isteri
-    - IC Baru Isteri
     - Umur Isteri
-    - Mas Kahwin
+    - IC Isteri
+    - Tempat Rujuk
     - Nama Pendaftar
-    - Alamat Pendaftar
-    - Nama Wali
-    - Hubungan Wali
-    - Saksi 1
-    - Saksi 2
+    - Bil Cerai
+    - Rujuk Kali
+    - Tarikh Cerai
     - Tarikh Nikah
+    - Tarikh Rujuk
     - Tarikh Keluar
-    - Remarks
+    - Catatan Raw
+    - Hal Hal Lain
     - Confidence
     - Status
 
 review:
   reviewer_name: handwritten-reviewer
-  export_path: data/reviewed_exports/handwritten_reviewed.xlsx
+  export_path: data/reviewed_exports/handwritten_rujuk_modern_reviewed.xlsx
 
 training_export:
   output_dir: data/ground_truth
@@ -149,6 +151,6 @@ logging:
 
 postprocess:
   bil_sequence:
-    enabled: true
+    enabled: false
     start_number: null
     year: null

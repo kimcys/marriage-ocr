@@ -20,11 +20,9 @@ def validate_record(
     *,
     layout_confidence: float = 1.0,
     layout_ok: bool = True,
+    record_type: str = "nikah",
 ) -> ExtractedRecord:
-    validated = replace(record)
-    reasons: list[str] = []
-    critical = False
-    confidence = 1.0
+    validated = replace(record, record_type=str(record_type or "nikah").strip().upper())
 
     if not layout_ok:
         validated.confidence = 0.0
@@ -38,6 +36,36 @@ def validate_record(
         validated.status_review = "FAILED_OCR"
         validated.review_reason = ["OCR returned empty text"]
         return validated
+
+    scorer = _SCORERS.get(str(record_type or "nikah").strip().lower(), _score_nikah)
+    reasons, critical, confidence = scorer(validated, validation_config)
+
+    min_average_confidence = float(validation_config.get("min_average_confidence", 0.50))
+    average_ocr_confidence = mean([result.average_confidence for result in nonempty_results])
+    if average_ocr_confidence < min_average_confidence:
+        confidence -= 0.10
+        reasons.append("low OCR confidence")
+
+    if layout_confidence < 0.75:
+        confidence -= 0.20
+        reasons.append("low layout confidence")
+
+    validated.confidence = max(0.0, round(confidence, 4))
+    validated.review_reason = _dedupe_preserve_order(reasons)
+
+    ok_threshold = float(validation_config.get("ok_confidence_threshold", 0.85))
+    validated.status_review = (
+        "OK"
+        if validated.confidence >= ok_threshold and not critical and not validated.review_reason
+        else "REVIEW"
+    )
+    return validated
+
+
+def _score_nikah(validated: ExtractedRecord, validation_config: Mapping[str, Any]) -> tuple[list[str], bool, float]:
+    reasons: list[str] = []
+    critical = False
+    confidence = 1.0
 
     if not validated.nama_suami:
         confidence -= 0.20
@@ -113,26 +141,120 @@ def validate_record(
     if not validated.saksi_2:
         reasons.append("missing saksi 2")
 
-    min_average_confidence = float(validation_config.get("min_average_confidence", 0.50))
-    average_ocr_confidence = mean([result.average_confidence for result in nonempty_results])
-    if average_ocr_confidence < min_average_confidence:
-        confidence -= 0.10
-        reasons.append("low OCR confidence")
+    return reasons, critical, confidence
 
-    if layout_confidence < 0.75:
+
+def _score_spouse_pair_ic(
+    validated: ExtractedRecord,
+    reasons: list[str],
+    confidence: float,
+) -> tuple[float, bool]:
+    """Shared IC scoring for Cerai/Rujuk, which use one ic_suami/ic_isteri
+    field per person instead of Nikah's split ic_lama_*/ic_baru_*."""
+    critical = False
+    husband_ic_valid = is_valid_malaysian_ic(validated.ic_suami)
+    wife_ic_valid = is_valid_malaysian_ic(validated.ic_isteri)
+    if not husband_ic_valid:
+        confidence -= 0.15
+        reasons.append("missing or invalid husband IC")
+    if not wife_ic_valid:
+        confidence -= 0.15
+        reasons.append("missing or invalid wife IC")
+    if not husband_ic_valid and not wife_ic_valid:
+        critical = True
+        reasons.append("missing both IC values")
+
+    if is_suspicious_ic(validated.ic_suami):
+        confidence -= 0.15
+        reasons.append("suspicious husband IC (implausible digits)")
+    if is_suspicious_ic(validated.ic_isteri):
+        confidence -= 0.15
+        reasons.append("suspicious wife IC (implausible digits)")
+
+    return confidence, critical
+
+
+def _score_names(validated: ExtractedRecord, reasons: list[str], confidence: float) -> tuple[float, bool]:
+    critical = False
+    if not validated.nama_suami:
         confidence -= 0.20
-        reasons.append("low layout confidence")
+        reasons.append("missing husband name")
+        critical = True
+    elif _is_name_suspicious(validated.nama_suami):
+        confidence -= 0.15
+        reasons.append("suspicious symbols in husband name")
 
-    validated.confidence = max(0.0, round(confidence, 4))
-    validated.review_reason = _dedupe_preserve_order(reasons)
+    if not validated.nama_isteri:
+        confidence -= 0.20
+        reasons.append("missing wife name")
+        critical = True
+    elif _is_name_suspicious(validated.nama_isteri):
+        confidence -= 0.15
+        reasons.append("suspicious symbols in wife name")
 
-    ok_threshold = float(validation_config.get("ok_confidence_threshold", 0.85))
-    validated.status_review = (
-        "OK"
-        if validated.confidence >= ok_threshold and not critical and not validated.review_reason
-        else "REVIEW"
-    )
-    return validated
+    return confidence, critical
+
+
+def _score_cerai(validated: ExtractedRecord, validation_config: Mapping[str, Any]) -> tuple[list[str], bool, float]:
+    reasons: list[str] = []
+    confidence = 1.0
+    critical = False
+
+    confidence, name_critical = _score_names(validated, reasons, confidence)
+    critical = critical or name_critical
+
+    confidence, ic_critical = _score_spouse_pair_ic(validated, reasons, confidence)
+    critical = critical or ic_critical
+
+    if bool(validation_config.get("require_tarikh_cerai", True)) and not is_valid_date(validated.tarikh_cerai):
+        confidence -= 0.10
+        reasons.append("invalid or missing cerai date")
+        critical = True
+
+    if validated.tarikh_keluar_raw and not is_valid_date(validated.tarikh_keluar):
+        confidence -= 0.10
+        reasons.append("invalid keluar date")
+
+    return reasons, critical, confidence
+
+
+def _score_rujuk(validated: ExtractedRecord, validation_config: Mapping[str, Any]) -> tuple[list[str], bool, float]:
+    reasons: list[str] = []
+    confidence = 1.0
+    critical = False
+
+    confidence, name_critical = _score_names(validated, reasons, confidence)
+    critical = critical or name_critical
+
+    confidence, ic_critical = _score_spouse_pair_ic(validated, reasons, confidence)
+    critical = critical or ic_critical
+
+    # Ages are only present on the legacy layout -- soft check only, not
+    # critical, since the modern layout legitimately omits them.
+    if validated.umur_suami is not None and not _age_valid(validated.umur_suami, validation_config):
+        confidence -= 0.10
+        reasons.append("invalid husband age")
+    if validated.umur_isteri is not None and not _age_valid(validated.umur_isteri, validation_config):
+        confidence -= 0.10
+        reasons.append("invalid wife age")
+
+    if bool(validation_config.get("require_tarikh_rujuk", True)) and not is_valid_date(validated.tarikh_rujuk):
+        confidence -= 0.10
+        reasons.append("invalid or missing rujuk date")
+        critical = True
+
+    if validated.tarikh_keluar_raw and not is_valid_date(validated.tarikh_keluar):
+        confidence -= 0.10
+        reasons.append("invalid keluar date")
+
+    return reasons, critical, confidence
+
+
+_SCORERS = {
+    "nikah": _score_nikah,
+    "cerai": _score_cerai,
+    "rujuk": _score_rujuk,
+}
 
 
 def estimate_layout_confidence(

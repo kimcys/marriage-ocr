@@ -117,9 +117,65 @@ def test_insert_record_normalizes_status_and_source_numbers(monkeypatch):
     assert captured_params[0] == ("sample.jpg", 2, 7)
     assert captured_params[1][2] == 2
     assert captured_params[1][3] == 7
-    assert captured_params[1][14] == "OK"
-    assert captured_params[1][16].obj == ["missing wali"]
-    assert captured_params[1][13].obj == "{\"ok\": true}"
+    assert captured_params[1][28] == "OK"
+    assert captured_params[1][30].obj == ["missing wali"]
+    assert captured_params[1][27].obj == "{\"ok\": true}"
+
+
+def test_insert_record_persists_record_type_for_cerai(monkeypatch):
+    captured_params = []
+
+    class DummyCursor:
+        def execute(self, query, params=None):
+            captured_params.append(params)
+
+        def fetchone(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyConnection:
+        def __init__(self):
+            self.cursor_obj = DummyCursor()
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(db_postgres, "get_connection", lambda: DummyConnection())
+
+    db_postgres.insert_record(
+        batch_id=1,
+        source_file="cerai.jpg",
+        source_page=1,
+        source_record=1,
+        record={
+            "record_type": "CERAI",
+            "bil": "1/97",
+            "nama_suami": "ABDULLAH B. ABD HAMID",
+            "ic_suami": "A0394566",
+            "tarikh_cerai": "1997-01-21",
+            "status_review": "REVIEW",
+            "confidence": 0.7,
+        },
+    )
+
+    insert_params = captured_params[1]
+    assert insert_params[4] == "CERAI"
+    assert insert_params[17] == "A0394566"
+    assert insert_params[21] == "1997-01-21"
 
 
 def test_get_connection_reuses_a_single_pool_across_calls(monkeypatch):
@@ -181,7 +237,7 @@ class _FakeCursor:
             self._last_result = {"status": status} if status is not None else None
         elif normalized.startswith("INSERT INTO records"):
             source_file, source_page, source_record = params[1], params[2], params[3]
-            status = params[14]
+            status = params[28]
             self.db.records[(source_file, source_page, source_record)] = status
             self._last_result = None
         elif "ok_records" in normalized:
