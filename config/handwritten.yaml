@@ -56,7 +56,7 @@ ocr:
     retry_names: true
     retry_ic_numbers: true
     retry_dates: true
-    max_variants_per_field: 4
+    max_variants_per_field: 2
     minimum_candidate_score: 0.65
     minimum_score_improvement: 0.05
     save_retry_images: false

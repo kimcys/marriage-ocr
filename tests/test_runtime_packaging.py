@@ -54,7 +54,7 @@ def test_handwritten_config_uses_cell_crops_and_public_export() -> None:
     assert loaded.data["ocr"]["field_refinement"]["enabled"] is True
     assert loaded.data["llm"]["enabled"] is True
     assert loaded.data["llm"]["provider"] == "gemini"
-    assert loaded.data["ocr"]["field_refinement"]["max_variants_per_field"] == 4
+    assert loaded.data["ocr"]["field_refinement"]["max_variants_per_field"] == 2
     assert loaded.data["ocr"]["field_refinement"]["minimum_candidate_score"] == 0.65
     assert loaded.data["ocr"]["field_refinement"]["minimum_score_improvement"] == 0.05
     assert loaded.data["llm"]["prompt_mode"] == "handwritten_aggressive"
