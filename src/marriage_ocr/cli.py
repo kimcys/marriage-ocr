@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -83,6 +84,56 @@ def _handle_command_error(
 @app.callback()
 def main() -> None:
     """Marriage register OCR pipeline."""
+
+
+@app.command("classify")
+def classify(
+    input: Path = typer.Option(..., "--input", "-i", help="Input image or PDF to classify"),
+) -> None:
+    """Classify one file's doc_type/record_type/layout_variant and print the
+    result -- plus which config it would route to, if any -- as one JSON
+    object on stdout.
+
+    For an external caller (e.g. marriage-be) that receives files of unknown
+    type (a OneDrive dump can mix handwritten/typed, Nikah/Cerai/Rujuk) and
+    needs to know which config to run `process`/`process-typed` with before
+    it can do so. Reuses triage.classify_file and batch_runner.ROUTING_TABLE
+    directly rather than duplicating that routing decision here -- those
+    stay the single source of truth for what routes where.
+    """
+    from marriage_ocr import triage
+    from marriage_ocr.batch_runner import ROUTING_TABLE, SUPPORTED_EXTENSIONS
+
+    if not input.exists():
+        raise typer.BadParameter(f"Input path does not exist: {input}")
+
+    classification = triage.classify_file(input, allowed_extensions=sorted(SUPPORTED_EXTENSIONS))
+
+    result: dict[str, Any] = {
+        "doc_type": classification.doc_type,
+        "record_type": classification.record_type,
+        "layout_variant": classification.layout_variant,
+        "is_jawi": classification.is_jawi,
+        "jawi_proportion": classification.jawi_proportion,
+        "notes": classification.notes,
+    }
+
+    if classification.is_jawi:
+        result["status"] = "SKIPPED_JAWI"
+        result["config_path"] = None
+    else:
+        route_key = (classification.doc_type, classification.record_type, classification.layout_variant)
+        routed_config = ROUTING_TABLE.get(route_key)
+        if routed_config is None:
+            result["status"] = (
+                "BLOCKED_NO_TEMPLATE" if classification.doc_type == "typed" else "NEEDS_MANUAL_CLASSIFICATION"
+            )
+            result["config_path"] = None
+        else:
+            result["status"] = "ROUTABLE"
+            result["config_path"] = routed_config
+
+    print(json.dumps(result, ensure_ascii=False))
 
 
 @app.command()
