@@ -5,6 +5,12 @@ project:
 record_type: RUJUK
 layout_variant: modern
 
+# Full-Gemini-per-page: one Gemini call reads the whole page and returns
+# every record on it directly -- no Vision OCR, no cell_crops, no
+# deterministic parser. See src/marriage_ocr/gemini_page_pipeline.py.
+pipeline:
+  engine: gemini_page
+
 input:
   allowed_extensions:
     - ".jpg"

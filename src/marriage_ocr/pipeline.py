@@ -82,6 +82,27 @@ def process_input(
 ) -> ProcessResult:
     """Run the OCR pipeline for an input path and return the parsed records."""
 
+    loaded = load_runtime_config(config_path)
+    cfg = loaded.data
+
+    if str(cfg.get("pipeline", {}).get("engine", "")).strip().lower() == "gemini_page":
+        # Full-Gemini-per-page: no Vision OCR, no deterministic parser, no
+        # cropping -- a structurally different pipeline, not just a config
+        # tweak, so it lives in its own module. See
+        # gemini_page_pipeline.py's docstring for why this exists.
+        from marriage_ocr.gemini_page_pipeline import process_input_gemini_page
+
+        return process_input_gemini_page(
+            input_path=input_path,
+            output_path=output_path,
+            debug_path=debug_path,
+            config_path=config_path,
+            retain_debug_artifacts=retain_debug_artifacts,
+            reset_output=reset_output,
+            skip_existing=skip_existing,
+            progress_callback=progress_callback,
+        )
+
     from marriage_ocr.cropper import save_record_crops
     from marriage_ocr.document_loader import load_document_pages, write_image
     from marriage_ocr.exporter import export_records_to_csv, export_records_to_xlsx
@@ -92,8 +113,6 @@ def process_input(
     from marriage_ocr.preprocess import PreprocessSettings, preprocess_image
     from marriage_ocr.validation import estimate_layout_confidence
 
-    loaded = load_runtime_config(config_path)
-    cfg = loaded.data
     logger = get_logger("marriage_ocr.process")
     debug_cfg = cfg.get("debug", {})
     if retain_debug_artifacts is None:

@@ -5,6 +5,14 @@ project:
 record_type: NIKAH
 layout_variant: legacy
 
+# Full-Gemini-per-page: one Gemini call reads the whole page and returns
+# every record on it directly -- no Vision OCR, no cell_crops, no
+# deterministic parser. See src/marriage_ocr/gemini_page_pipeline.py.
+# ocr.mode/field_refinement below are unused in this mode (no OCR engine
+# runs at all) but left in place in case this is ever reverted.
+pipeline:
+  engine: gemini_page
+
 input:
   allowed_extensions:
     - ".jpg"

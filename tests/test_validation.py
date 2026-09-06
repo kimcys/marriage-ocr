@@ -6,6 +6,7 @@ from marriage_ocr.validation import (
     is_valid_date,
     is_valid_malaysian_ic,
     parser_confidence_clears_threshold,
+    validate_gemini_only_record,
     validate_record,
 )
 
@@ -245,3 +246,110 @@ def test_validate_record_rujuk_flags_implausible_age_when_present() -> None:
     )
 
     assert "invalid husband age" in validated.review_reason
+
+
+def test_validate_gemini_only_record_marks_good_record_ok_with_solid_confidence() -> None:
+    record = ExtractedRecord(
+        bil="12",
+        nama_suami="MOHAMAD BIN YASMIN",
+        ic_lama_suami="A 1192345",
+        umur_suami=25,
+        nama_isteri="SITI BINTI ALI",
+        ic_baru_isteri="900101101234",
+        umur_isteri=23,
+        mas_kahwin="RM 80.00",
+        mas_kahwin_raw="RM 80.00",
+        nama_pendaftar="MOHD SALLEH",
+        alamat_pendaftar="KAMPUNG BARU",
+        nama_wali="ABDUL RAHMAN",
+        hubungan_wali="BAPA",
+        saksi_1="AHMAD BIN ALI",
+        saksi_2="OSMAN BIN DIN",
+        tarikh_nikah="1994-08-27",
+    )
+
+    validated = validate_gemini_only_record(
+        record,
+        field_confidence={"nama_suami": 0.95, "nama_isteri": 0.96, "bil": 0.9},
+        uncertain_fields=[],
+        validation_config=VALIDATION_CONFIG,
+        record_type="nikah",
+    )
+
+    assert validated.status_review == "OK"
+    assert validated.review_reason == []
+
+
+def test_validate_gemini_only_record_flags_missing_husband_name_as_critical() -> None:
+    record = ExtractedRecord(bil="12", nama_isteri="SITI BINTI ALI", tarikh_nikah="1994-08-27")
+
+    validated = validate_gemini_only_record(
+        record,
+        field_confidence={"nama_isteri": 0.95},
+        uncertain_fields=[],
+        validation_config=VALIDATION_CONFIG,
+        record_type="nikah",
+    )
+
+    assert validated.status_review == "REVIEW"
+    assert "missing husband name" in validated.review_reason
+
+
+def test_validate_gemini_only_record_penalizes_missing_confidence_signal() -> None:
+    record = ExtractedRecord(
+        bil="12",
+        nama_suami="MOHAMAD BIN YASMIN",
+        ic_lama_suami="A 1192345",
+        umur_suami=25,
+        nama_isteri="SITI BINTI ALI",
+        ic_baru_isteri="900101101234",
+        umur_isteri=23,
+        mas_kahwin="RM 80.00",
+        nama_pendaftar="MOHD SALLEH",
+        nama_wali="ABDUL RAHMAN",
+        hubungan_wali="BAPA",
+        saksi_1="AHMAD BIN ALI",
+        saksi_2="OSMAN BIN DIN",
+        tarikh_nikah="1994-08-27",
+    )
+
+    validated = validate_gemini_only_record(
+        record,
+        field_confidence={},
+        uncertain_fields=[],
+        validation_config=VALIDATION_CONFIG,
+        record_type="nikah",
+    )
+
+    assert "no Gemini field confidence reported" in validated.review_reason
+    assert validated.status_review == "REVIEW"
+
+
+def test_validate_gemini_only_record_penalizes_uncertain_fields() -> None:
+    record = ExtractedRecord(
+        bil="12",
+        nama_suami="MOHAMAD BIN YASMIN",
+        ic_lama_suami="A 1192345",
+        umur_suami=25,
+        nama_isteri="SITI BINTI ALI",
+        ic_baru_isteri="900101101234",
+        umur_isteri=23,
+        mas_kahwin="RM 80.00",
+        nama_pendaftar="MOHD SALLEH",
+        nama_wali="ABDUL RAHMAN",
+        hubungan_wali="BAPA",
+        saksi_1="AHMAD BIN ALI",
+        saksi_2="OSMAN BIN DIN",
+        tarikh_nikah="1994-08-27",
+    )
+
+    validated = validate_gemini_only_record(
+        record,
+        field_confidence={"nama_suami": 0.95, "nama_isteri": 0.6},
+        uncertain_fields=["nama_isteri"],
+        validation_config=VALIDATION_CONFIG,
+        record_type="nikah",
+    )
+
+    assert any("uncertain fields" in reason for reason in validated.review_reason)
+    assert validated.status_review == "REVIEW"

@@ -62,6 +62,60 @@ def validate_record(
     return validated
 
 
+def validate_gemini_only_record(
+    record: ExtractedRecord,
+    *,
+    field_confidence: Mapping[str, float],
+    uncertain_fields: Any = (),
+    validation_config: Mapping[str, Any],
+    record_type: str = "nikah",
+) -> ExtractedRecord:
+    """validate_record's counterpart for a pipeline with no Vision OCR at
+    all (see gemini_page_pipeline.py) -- there's no cell_results to check
+    for "OCR returned nothing" or to average into a confidence score.
+
+    Reuses the SAME per-field sanity scorers validate_record uses
+    (_score_nikah/_score_cerai/_score_rujuk): IC format, age range, date
+    validity, required fields present. Those checks are about the
+    extracted VALUES, not about how they were extracted, so they're just as
+    meaningful here as when Vision was in the loop -- unlike Gemini's own
+    field_confidence, which real testing found too flat across records
+    (0.966-0.979 regardless of actual accuracy) to rank which ones need a
+    human. uncertain_fields is added as a direct, blunter penalty precisely
+    because that flat confidence can't be trusted to carry the signal on
+    its own.
+    """
+    validated = replace(record, record_type=str(record_type or "nikah").strip().upper())
+
+    scorer = _SCORERS.get(str(record_type or "nikah").strip().lower(), _score_nikah)
+    reasons, critical, confidence = scorer(validated, validation_config)
+
+    if field_confidence:
+        min_average_confidence = float(validation_config.get("min_average_confidence", 0.50))
+        average_field_confidence = mean(field_confidence.values())
+        if average_field_confidence < min_average_confidence:
+            confidence -= 0.10
+            reasons.append("low Gemini field confidence")
+    else:
+        confidence -= 0.10
+        reasons.append("no Gemini field confidence reported")
+
+    if uncertain_fields:
+        confidence -= 0.05 * len(list(uncertain_fields))
+        reasons.append("Gemini uncertain fields: " + ", ".join(str(field) for field in uncertain_fields))
+
+    validated.confidence = max(0.0, round(confidence, 4))
+    validated.review_reason = _dedupe_preserve_order(reasons)
+
+    ok_threshold = float(validation_config.get("ok_confidence_threshold", 0.85))
+    validated.status_review = (
+        "OK"
+        if validated.confidence >= ok_threshold and not critical and not validated.review_reason
+        else "REVIEW"
+    )
+    return validated
+
+
 def parser_confidence_clears_threshold(record: ExtractedRecord, *, min_confidence: float) -> bool:
     """True when a parser-only validated record is trustworthy enough to
     skip a Gemini call entirely -- status_review must already be "OK" (no

@@ -6,12 +6,14 @@ from .gemini_batch_extractor import (
     run_batch_extraction,
 )
 from .gemini_extractor import GeminiRecordExtractor, GeminiRecordResult
+from .gemini_page_extractor import GeminiPageExtractor
 from .record_merge import merge_parser_and_gemini
 
 __all__ = [
     "BatchExtractionSummary",
     "BatchRecordItem",
     "GeminiBatchRecordExtractor",
+    "GeminiPageExtractor",
     "GeminiRecordExtractor",
     "GeminiRecordResult",
     "discover_batch_items",

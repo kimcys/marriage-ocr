@@ -104,7 +104,14 @@ class GeminiRecordExtractor:
 
         return self._payload_to_result(payload)
 
-    def _generate_content(self, prompt: str, image_part: Any) -> Any:
+    def _generate_content(
+        self,
+        prompt: str,
+        image_part: Any,
+        *,
+        schema: dict[str, Any] | None = None,
+        max_output_tokens: int | None = None,
+    ) -> Any:
         """Call Gemini with retry-with-backoff on transient errors.
 
         Without this, a single 429/RESOURCE_EXHAUSTED or 5xx propagated
@@ -116,12 +123,16 @@ class GeminiRecordExtractor:
         rate-limit response is the routine case, not the exception; retrying
         the single call first, before falling back at all, keeps far more
         records on the higher-accuracy Gemini path.
+
+        `schema`/`max_output_tokens` default to the single-record settings;
+        gemini_page_extractor.py overrides both for its "many records in one
+        call" schema, which needs a larger response budget.
         """
         config = self._types.GenerateContentConfig(
             temperature=self.temperature,
-            max_output_tokens=self.max_output_tokens,
+            max_output_tokens=max_output_tokens if max_output_tokens is not None else self.max_output_tokens,
             response_mime_type="application/json",
-            response_schema=self._response_schema(),
+            response_schema=schema if schema is not None else self._response_schema(),
             http_options=self._types.HttpOptions(timeout=int(self._request_timeout_seconds * 1000)),
         )
         delay = self._initial_delay_seconds
@@ -170,9 +181,22 @@ class GeminiRecordExtractor:
                 layout_variant=self.layout_variant,
             )
 
+        return f"""
+{self._nikah_instructions()}
+
+Google Vision OCR cell hints:
+{json.dumps(cell_hints, ensure_ascii=False, indent=2)}
+""".strip()
+
+    def _nikah_instructions(self) -> str:
+        """The Nikah rules block, without the per-record framing or the OCR
+        cell hints suffix -- split out so gemini_page_extractor.py can reuse
+        the exact same rules inside a "whole page, many records" prompt
+        instead of duplicating this text.
+        """
         prompt_mode = str(self.config.get("prompt_mode", "")).strip().lower()
         if prompt_mode == "handwritten_aggressive":
-            instructions = """
+            return """
 You are extracting ONE handwritten row from a Malay Islamic marriage register,
 Daftar Perkahwinan Orang Islam.
 
@@ -202,8 +226,8 @@ Rules:
         - Return field_confidence as an array of objects with `field` and `confidence`.
         - Put fields below 0.70 confidence into uncertain_fields.
 """.strip()
-        else:
-            instructions = """
+
+        return """
 You are extracting ONE handwritten row from a Malay Islamic marriage register,
 Daftar Perkahwinan Orang Islam.
 
@@ -228,12 +252,6 @@ Rules:
 - saksi_1 and saksi_2 are the two marriage witnesses when visible.
         - Return field_confidence as an array of objects with `field` and `confidence`.
         - Put fields below 0.70 confidence into uncertain_fields.
-""".strip()
-        return f"""
-{instructions}
-
-Google Vision OCR cell hints:
-{json.dumps(cell_hints, ensure_ascii=False, indent=2)}
 """.strip()
 
     def _parse_response_text(self, text: str) -> dict[str, Any]:
