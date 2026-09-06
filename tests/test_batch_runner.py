@@ -1,3 +1,5 @@
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -278,10 +280,13 @@ def test_run_batch_routes_typed_doc_type_to_typed_pipeline(monkeypatch, tmp_path
     )
 
     typed_calls = []
+
+    def fake_process_typed_documents_no_csv(**kwargs):
+        typed_calls.append(kwargs)
+        return []
+
     monkeypatch.setattr(
-        batch_runner,
-        "process_typed_input",
-        lambda **kwargs: typed_calls.append(kwargs),
+        batch_runner, "process_typed_documents_no_csv", fake_process_typed_documents_no_csv
     )
 
     batch_runner.run_batch(
@@ -309,8 +314,8 @@ def test_run_batch_blocks_typed_record_type_with_no_template(monkeypatch, tmp_pa
         AssertionError("process_input must not be called for a blocked file")
     ))
     monkeypatch.setattr(
-        batch_runner, "process_typed_input", lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError("process_typed_input must not be called with no matching template")
+        batch_runner, "process_typed_documents_no_csv", lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("process_typed_documents_no_csv must not be called with no matching template")
         )
     )
     monkeypatch.setattr(
@@ -359,10 +364,13 @@ def test_run_batch_routes_typed_cerai_modern_to_its_own_config(monkeypatch, tmp_
     )
 
     typed_calls = []
+
+    def fake_process_typed_documents_no_csv(**kwargs):
+        typed_calls.append(kwargs)
+        return []
+
     monkeypatch.setattr(
-        batch_runner,
-        "process_typed_input",
-        lambda **kwargs: typed_calls.append(kwargs),
+        batch_runner, "process_typed_documents_no_csv", fake_process_typed_documents_no_csv
     )
 
     batch_runner.run_batch(
@@ -373,6 +381,214 @@ def test_run_batch_routes_typed_cerai_modern_to_its_own_config(monkeypatch, tmp_
 
     assert len(typed_calls) == 1
     assert typed_calls[0]["config_path"] == Path("config/typed_cerai_modern.yaml")
+
+
+def test_run_batch_processes_multiple_files_concurrently_with_workers(monkeypatch, tmp_path: Path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir(parents=True)
+    input_files = []
+    for i in range(5):
+        f = input_dir / f"sample_{i}.jpg"
+        f.write_bytes(b"fake-image")
+        input_files.append(f)
+
+    _stub_common(monkeypatch, tmp_path, input_files[0])
+    monkeypatch.setattr(batch_runner, "list_input_files", lambda input_dir: list(input_files))
+    monkeypatch.setattr(batch_runner, "mark_file_done", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        batch_runner.triage,
+        "classify_file",
+        lambda path, **kwargs: Classification(
+            doc_type="handwritten", record_type="nikah", layout_variant="legacy",
+            is_jawi=False, jawi_proportion=0.0,
+        ),
+    )
+    monkeypatch.setattr(batch_runner, "find_duplicate_record", lambda **kwargs: None)
+
+    def fake_process_input(*, input_path, output_path, debug_path, config_path):
+        time.sleep(0.02)
+        return SimpleNamespace(records=[ExtractedRecord(bil=input_path.stem, source_record="record_001")])
+
+    monkeypatch.setattr(batch_runner, "process_input", fake_process_input)
+
+    insert_calls = []
+    lock = threading.Lock()
+
+    def fake_insert_record(**kwargs):
+        with lock:
+            insert_calls.append(kwargs)
+
+    monkeypatch.setattr(batch_runner, "insert_record", fake_insert_record)
+
+    batch_runner.run_batch(
+        input_dir=str(input_dir),
+        batch_name="concurrent_run",
+        output_dir=str(tmp_path / "batch_output"),
+        workers=3,
+    )
+
+    assert len(insert_calls) == 5
+    assert {call["source_file"] for call in insert_calls} == {str(f) for f in input_files}
+
+
+def test_run_batch_isolates_one_failing_file_from_the_rest(monkeypatch, tmp_path: Path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir(parents=True)
+    good_files = [input_dir / "good_1.jpg", input_dir / "good_2.jpg"]
+    bad_file = input_dir / "bad.jpg"
+    for f in good_files + [bad_file]:
+        f.write_bytes(b"fake-image")
+
+    _stub_common(monkeypatch, tmp_path, good_files[0])
+    monkeypatch.setattr(batch_runner, "list_input_files", lambda input_dir: [*good_files, bad_file])
+    monkeypatch.setattr(batch_runner, "mark_file_done", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        batch_runner.triage,
+        "classify_file",
+        lambda path, **kwargs: Classification(
+            doc_type="handwritten", record_type="nikah", layout_variant="legacy",
+            is_jawi=False, jawi_proportion=0.0,
+        ),
+    )
+    monkeypatch.setattr(batch_runner, "find_duplicate_record", lambda **kwargs: None)
+    monkeypatch.setattr(batch_runner, "insert_record", lambda **kwargs: None)
+
+    def fake_process_input(*, input_path, output_path, debug_path, config_path):
+        if input_path == bad_file:
+            raise RuntimeError("simulated OCR crash")
+        return SimpleNamespace(records=[ExtractedRecord(bil="1", source_record="record_001")])
+
+    monkeypatch.setattr(batch_runner, "process_input", fake_process_input)
+
+    failed_calls = []
+    done_calls = []
+    monkeypatch.setattr(
+        batch_runner, "mark_file_failed",
+        lambda **kwargs: failed_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        batch_runner, "mark_file_done",
+        lambda *args, **kwargs: done_calls.append(args),
+    )
+
+    batch_runner.run_batch(
+        input_dir=str(input_dir),
+        batch_name="isolated_failure",
+        output_dir=str(tmp_path / "batch_output"),
+        workers=3,
+    )
+
+    assert len(failed_calls) == 1
+    assert failed_calls[0]["file_path"] == str(bad_file)
+    assert {args[1] for args in done_calls} == {str(f) for f in good_files}
+
+
+def test_run_batch_processes_typed_files_concurrently(monkeypatch, tmp_path: Path):
+    # Typed files used to serialize against each other behind a CSV-writer
+    # lock (see git history). Now that typed results go straight into
+    # Postgres like the general path, they should run fully concurrently --
+    # this proves at least two files' process_typed_documents_no_csv calls
+    # are in flight at the same time, not one-at-a-time.
+    input_dir = tmp_path / "input"
+    input_dir.mkdir(parents=True)
+    input_files = []
+    for i in range(4):
+        f = input_dir / f"cert_{i}.pdf"
+        f.write_bytes(b"fake-pdf")
+        input_files.append(f)
+
+    _stub_common(monkeypatch, tmp_path, input_files[0])
+    monkeypatch.setattr(batch_runner, "list_input_files", lambda input_dir: list(input_files))
+    monkeypatch.setattr(batch_runner, "mark_file_done", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        batch_runner.triage,
+        "classify_file",
+        lambda path, **kwargs: Classification(
+            doc_type="typed", record_type="nikah", layout_variant=None,
+            is_jawi=False, jawi_proportion=0.0,
+        ),
+    )
+
+    state_lock = threading.Lock()
+    state = {"current": 0, "max_seen": 0}
+
+    def fake_process_typed_documents_no_csv(**kwargs):
+        with state_lock:
+            state["current"] += 1
+            state["max_seen"] = max(state["max_seen"], state["current"])
+        time.sleep(0.05)
+        with state_lock:
+            state["current"] -= 1
+        return []
+
+    monkeypatch.setattr(
+        batch_runner, "process_typed_documents_no_csv", fake_process_typed_documents_no_csv
+    )
+
+    batch_runner.run_batch(
+        input_dir=str(input_dir),
+        batch_name="typed_concurrency",
+        output_dir=str(tmp_path / "batch_output"),
+        workers=4,
+    )
+
+    assert state["max_seen"] > 1
+
+
+def test_run_batch_inserts_typed_results_with_mapped_status(monkeypatch, tmp_path: Path):
+    input_file = tmp_path / "input" / "certificate.pdf"
+    input_file.parent.mkdir(parents=True)
+    input_file.write_bytes(b"fake-pdf")
+
+    _stub_common(monkeypatch, tmp_path, input_file)
+    monkeypatch.setattr(batch_runner, "mark_file_done", lambda *args, **kwargs: None)
+    monkeypatch.setattr(batch_runner, "find_duplicate_record", lambda **kwargs: None)
+    monkeypatch.setattr(
+        batch_runner.triage,
+        "classify_file",
+        lambda path, **kwargs: Classification(
+            doc_type="typed", record_type="nikah", layout_variant=None,
+            is_jawi=False, jawi_proportion=0.0,
+        ),
+    )
+
+    typed_record = ExtractedRecord(
+        record_type="NIKAH",
+        bil="04/2009",
+        nama_suami="HENDON BIN MARIMIN",
+        ic_baru_suami="571018105919",
+        source_file="certificate.pdf",
+        source_page=1,
+        source_record="01000122140838082020",  # a real typed source_stem: far too big for an INTEGER column
+    )
+    typed_result = SimpleNamespace(
+        record=typed_record,
+        processing_status=batch_runner.ProcessingStatus.SUCCESS_WITH_RETRY,
+        failed_fields=("umur_suami",),
+        error_message="",
+    )
+    monkeypatch.setattr(
+        batch_runner, "process_typed_documents_no_csv", lambda **kwargs: [typed_result]
+    )
+
+    insert_calls = []
+    monkeypatch.setattr(batch_runner, "insert_record", lambda **kwargs: insert_calls.append(kwargs))
+
+    batch_runner.run_batch(
+        input_dir=str(input_file.parent),
+        batch_name="typed_db_insert",
+        output_dir=str(tmp_path / "batch_output"),
+    )
+
+    assert len(insert_calls) == 1
+    call = insert_calls[0]
+    # source_record is forced to a small constant rather than the raw
+    # source_stem, which would overflow the records table's INTEGER column.
+    assert call["source_page"] == 1
+    assert call["source_record"] == 1
+    assert call["record"]["status_review"] == "OK"
+    assert call["record"]["bil"] == "04/2009"
+    assert "typed field failed: umur_suami" in call["record"]["review_reason"]
 
 
 def test_sync_gemini_batch_results_updates_matching_rows_and_preserves_dedup_flags(monkeypatch):

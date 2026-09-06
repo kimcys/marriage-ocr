@@ -428,16 +428,24 @@ def _process_micro_batch(
     return tuple(results)
 
 
-def process_typed_input(
+def _run_typed_micro_batches(
     *,
-    input_path: Path,
-    output_path: Path,
+    pending: Sequence[Path],
     debug_path: Path,
     config_path: Path,
-    reset_output: bool = False,
-    skip_existing: bool = False,
+    on_results: Callable[[list[TypedDocumentResult]], None],
     progress_callback: ProgressCallback | None = None,
-) -> TypedBatchResult:
+) -> list[TypedDocumentResult]:
+    """Shared OCR+parse+validate core, config-sized micro-batch at a time.
+
+    `on_results` is called with each micro-batch's results as soon as
+    they're ready, before moving to the next micro-batch -- so a caller can
+    persist partial progress (CSV flush, DB insert, ...) without losing it
+    if a later micro-batch crashes. Has no CSV/store dependency itself,
+    which is what lets `process_typed_documents_no_csv` below call this
+    safely from multiple threads at once (unlike `TypedCsvStore`, nothing
+    here is shared mutable state across calls).
+    """
     loaded = load_runtime_config(config_path)
     typed_cfg = dict(loaded.data.get("typed", {}))
     retry_cfg = dict(typed_cfg.get("retry", {}))
@@ -445,14 +453,6 @@ def process_typed_input(
     vision_cfg = dict(loaded.data.get("ocr", {}).get("google_vision", {}))
     template_name = str(typed_cfg.get("template", "borang_4b"))
     record_type = str(loaded.data.get("record_type", "NIKAH")).upper()
-    pdfs = discover_typed_pdfs(input_path)
-    store = TypedCsvStore.load(
-        output_path,
-        reset_output=reset_output,
-        skip_existing=skip_existing,
-    )
-    pending = [pdf for pdf in pdfs if not store.should_skip(pdf.name)]
-    skipped = tuple(pdf.name for pdf in pdfs if store.should_skip(pdf.name))
     client = TypedVisionClient(
         language_hints=tuple(vision_cfg.get("language_hints", ("ms", "en"))),
         api_attempts=int(retry_cfg.get("api_attempts", 3)),
@@ -474,14 +474,70 @@ def process_typed_input(
             template_name=template_name,
             record_type=record_type,
         )
-        for result in batch_results:
-            store.upsert(result)
-            completed.append(result)
-        store.flush()
+        on_results(list(batch_results))
+        completed.extend(batch_results)
         if progress_callback is not None:
             progress_callback(
                 f"Processed {min(start + batch_size, len(pending))}/{len(pending)} typed PDF(s)"
             )
+
+    return completed
+
+
+def process_typed_documents_no_csv(
+    *,
+    input_path: Path,
+    debug_path: Path,
+    config_path: Path,
+) -> list[TypedDocumentResult]:
+    """Like process_typed_input, but skips TypedCsvStore entirely -- for a
+    caller (batch_runner) that persists results some other way (a Postgres
+    insert, keyed by source_file/source_page/source_record) and needs this
+    safe to call concurrently, across threads, for different files at once.
+    TypedCsvStore's load-modify-flush cycle over one shared CSV file is not
+    safe for that: two threads racing would silently lose whichever file's
+    row got flushed first.
+    """
+    pdfs = discover_typed_pdfs(input_path)
+    return _run_typed_micro_batches(
+        pending=pdfs,
+        debug_path=debug_path,
+        config_path=config_path,
+        on_results=lambda _results: None,
+    )
+
+
+def process_typed_input(
+    *,
+    input_path: Path,
+    output_path: Path,
+    debug_path: Path,
+    config_path: Path,
+    reset_output: bool = False,
+    skip_existing: bool = False,
+    progress_callback: ProgressCallback | None = None,
+) -> TypedBatchResult:
+    pdfs = discover_typed_pdfs(input_path)
+    store = TypedCsvStore.load(
+        output_path,
+        reset_output=reset_output,
+        skip_existing=skip_existing,
+    )
+    pending = [pdf for pdf in pdfs if not store.should_skip(pdf.name)]
+    skipped = tuple(pdf.name for pdf in pdfs if store.should_skip(pdf.name))
+
+    def _persist(batch_results: list[TypedDocumentResult]) -> None:
+        for result in batch_results:
+            store.upsert(result)
+        store.flush()
+
+    completed = _run_typed_micro_batches(
+        pending=pending,
+        debug_path=debug_path,
+        config_path=config_path,
+        on_results=_persist,
+        progress_callback=progress_callback,
+    )
 
     ordered = tuple(sorted(completed, key=lambda result: result.source_file.casefold()))
     status_counts = Counter(result.processing_status.value for result in ordered)

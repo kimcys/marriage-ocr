@@ -157,6 +157,14 @@ ON records(ic_isteri);
 CREATE INDEX IF NOT EXISTS idx_records_record_type
 ON records(record_type);
 
+-- find_duplicate_record() filters on record_type + bil + is_duplicate = FALSE
+-- for every single record insert. Without this, that's an unindexed scan of
+-- the whole records table on every insert -- fine at a few thousand rows,
+-- but it gets steadily slower as the table grows toward 900k rows. Scoped to
+-- is_duplicate = FALSE since that's the only value the query ever filters on.
+CREATE INDEX IF NOT EXISTS idx_records_dedup_lookup
+ON records(record_type, bil) WHERE is_duplicate = FALSE;
+
 CREATE INDEX IF NOT EXISTS idx_processed_files_status
 ON processed_files(status);
 
