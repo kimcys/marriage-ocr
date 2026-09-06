@@ -3,8 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import cv2
-import fitz
 import numpy as np
+# `import pymupdf` (the current package name), not `import fitz` -- the old
+# `fitz` module is now just a compatibility shim that prints a deprecation
+# notice to stdout on every import, which corrupts any caller that treats
+# this CLI's stdout as pure output (e.g. `classify`'s JSON).
+import pymupdf as fitz
 
 from marriage_ocr.typed.models import RenderedPage
 

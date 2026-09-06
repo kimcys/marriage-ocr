@@ -107,10 +107,16 @@ def _render_pdf_pages(path: Path, relative_source: Path, pdf_dpi: int) -> list[D
         raise ValueError(f"pdf_dpi must be positive, got {pdf_dpi}")
 
     try:
-        import fitz
+        # `import pymupdf` (the current package name), not `import fitz` --
+        # the old `fitz` module is now just a compatibility shim that prints
+        # a deprecation notice to stdout on every import (pymupdf/__init__.py's
+        # message()/message_warning()), which corrupts any caller that treats
+        # this CLI's stdout as pure output (e.g. `classify`'s JSON, parsed by
+        # marriage-be's onedrive/runner.py).
+        import pymupdf as fitz
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
-            "PDF input requires PyMuPDF (`fitz`). Install project dependencies "
+            "PDF input requires PyMuPDF (`pymupdf`). Install project dependencies "
             "or remove PDF files from the input batch."
         ) from exc
 

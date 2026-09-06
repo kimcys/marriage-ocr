@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-import fitz
+import pymupdf as fitz
 
 from marriage_ocr.typed.models import PageOcrResult, PositionedWord, ProcessingStatus
 from marriage_ocr.typed.pipeline import process_typed_input
