@@ -26,9 +26,24 @@ below is a zero-auth fallback: it works with a plain HTTP GET whenever the
 client sets the share link's permission to "Anyone with the link", which is
 the common case for one-off external drops. It cannot help with links
 restricted to "People in your organization" or "Specific people" -- those
-still redirect to a Microsoft sign-in page no matter what, and only the
-delegated `OneDriveClient` flow (or the client re-sharing as "Anyone") gets
-past that.
+still redirect to a genuine Microsoft sign-in page no matter what, and only
+the delegated `OneDriveClient` flow (or the client re-sharing as "Anyone")
+gets past that.
+
+A third case, confirmed empirically (not documented anywhere by Microsoft):
+some "Anyone with the link" **folder** shares -- observed for folders that
+have been migrated to a SharePoint Online backend -- respond to the plain
+GET above with OneDrive's HTML web-app shell instead of raw file bytes or a
+zip, even though the link never touches a sign-in host and the folder is
+genuinely browsable anonymously. A real browser executing that page's JS
+resolves the anonymous session and lists/downloads the files fine, so
+`download_anonymous_share` falls back to a real headless-Chromium session
+(`_download_via_browser`, via Playwright) whenever it hits exactly this
+ambiguous shape (HTML body, non-sign-in host). This fallback is inherently
+more fragile than the two paths above -- it depends on OneDrive's current
+web UI markup, which Microsoft can change without notice -- so it's only
+attempted when the plain GET can't be reasonably interpreted for the caller
+some other way.
 """
 from __future__ import annotations
 
@@ -76,11 +91,9 @@ def _add_download_param(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
-def _looks_like_signin_redirect(response: requests.Response) -> bool:
-    final_host = urlsplit(response.url).netloc.lower()
-    if any(marker in final_host for marker in _SIGNIN_HOST_MARKERS):
-        return True
-    return response.headers.get("Content-Type", "").startswith("text/html")
+def _url_is_signin_host(url: str) -> bool:
+    final_host = urlsplit(url).netloc.lower()
+    return any(marker in final_host for marker in _SIGNIN_HOST_MARKERS)
 
 
 def _filename_from_response(response: requests.Response, fallback: str) -> str:
@@ -95,19 +108,30 @@ def _filename_from_response(response: requests.Response, fallback: str) -> str:
     return name or fallback
 
 
+_SIGNIN_REQUIRED_MESSAGE = (
+    "This OneDrive link requires signing in -- it isn't shared as "
+    '"Anyone with the link". Ask the client to change the link\'s '
+    'sharing permission to "Anyone", or use `onedrive login` + '
+    "`onedrive fetch` instead (needs an Entra ID app registration)."
+)
+
+
 def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]:
     """Download a OneDrive/SharePoint share link with a plain, unauthenticated
     HTTP GET -- no Entra ID app registration, no sign-in, no client-id.
 
     Only works when the client set the link's permission to "Anyone with the
     link"; anything scoped to "People in your organization" or "Specific
-    people" redirects to a Microsoft sign-in page, and this raises a
+    people" redirects to a genuine Microsoft sign-in page, and this raises a
     `RuntimeError` telling the caller to fall back to `OneDriveClient`
     (`onedrive login` + `onedrive fetch`) or to ask the client to re-share
     the link as "Anyone".
 
     Handles both a single-file link and a folder link (a "Anyone" folder
-    link comes back as a zip, which is extracted under `dest_dir`).
+    link comes back as a zip, which is extracted under `dest_dir`) -- and,
+    for the folder shapes that come back as an HTML page instead of either
+    of those despite not touching a sign-in host, falls back to a real
+    headless-browser session (see the module docstring).
     """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -124,13 +148,21 @@ def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]
     )
     response.raise_for_status()
 
-    if _looks_like_signin_redirect(response):
-        raise RuntimeError(
-            "This OneDrive link requires signing in -- it isn't shared as "
-            '"Anyone with the link". Ask the client to change the link\'s '
-            'sharing permission to "Anyone", or use `onedrive login` + '
-            "`onedrive fetch` instead (needs an Entra ID app registration)."
+    if _url_is_signin_host(response.url):
+        raise RuntimeError(_SIGNIN_REQUIRED_MESSAGE)
+
+    if response.headers.get("Content-Type", "").startswith("text/html"):
+        # Ambiguous: not a sign-in redirect, but not raw file/zip bytes
+        # either -- some folder shares (observed for SharePoint-Online-
+        # migrated folders) serve OneDrive's web-app shell here even though
+        # they're genuinely browsable anonymously. A real browser executing
+        # that page's JS can still pull the files out; see _download_via_browser.
+        LOGGER.info(
+            "Anonymous GET for %s returned an HTML page instead of raw file bytes; "
+            "falling back to a headless-browser download.",
+            share_url,
         )
+        return _download_via_browser(share_url, dest_dir)
 
     filename = _filename_from_response(response, fallback="download")
     content_type = response.headers.get("Content-Type", "")
@@ -158,6 +190,132 @@ def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]
         for chunk in response.iter_content(chunk_size=1024 * 1024):
             handle.write(chunk)
     return [local_path]
+
+
+# Safety cap on how many items a single browser-driven folder download will
+# process -- each one is a real UI-driven download, not a bulk zip (see
+# _download_all_rows_via_browser), so an unbounded folder could otherwise
+# hold a worker for a very long time.
+_MAX_BROWSER_DOWNLOAD_ITEMS = 300
+_BROWSER_DOWNLOAD_TIMEOUT_MS = 60_000
+
+
+def _download_all_rows_via_browser(page: Any, dest_dir: Path) -> list[Path]:
+    """Folder-listing shape: one row per file, each with its own "..." (Show
+    more actions) menu. Downloads each file individually via that per-row
+    menu's "Download" item -- not the shared multi-select toolbar, which
+    empirically never fired a download event for a multi-file selection on
+    this same page shape."""
+    rows = page.get_by_role("row")
+    total = rows.count()
+    if total <= 1:  # only the header row, or no rows at all
+        return []
+    if total - 1 > _MAX_BROWSER_DOWNLOAD_ITEMS:
+        LOGGER.warning(
+            "Folder listing has %d items; only downloading the first %d.",
+            total - 1,
+            _MAX_BROWSER_DOWNLOAD_ITEMS,
+        )
+
+    downloaded: list[Path] = []
+    for idx in range(1, min(total, _MAX_BROWSER_DOWNLOAD_ITEMS + 1)):
+        try:
+            # A prior row's click/selection can leave a stray overlay
+            # ("SelectionZone") intercepting pointer events on the next
+            # row -- clearing it before every row (not just after a
+            # failure) is what actually made this reliable past the first
+            # few rows in practice.
+            page.keyboard.press("Escape")
+            row = rows.nth(idx)
+            row.scroll_into_view_if_needed()
+            row.hover()
+            more_button = row.get_by_label("Show more actions for this item")
+            if more_button.count() == 0:
+                continue
+            more_button.first.click(timeout=10_000)
+
+            menu_item = page.get_by_role("menuitem", name="Download", exact=False)
+            if menu_item.count() == 0:
+                continue
+
+            with page.expect_download(timeout=_BROWSER_DOWNLOAD_TIMEOUT_MS) as dl_info:
+                menu_item.first.click(timeout=10_000)
+            download = dl_info.value
+            target = dest_dir / download.suggested_filename
+            download.save_as(target)
+            downloaded.append(target)
+        except Exception:
+            # One stuck/overlay-covered row shouldn't sacrifice every other
+            # file in the folder -- log and move on to the next row.
+            LOGGER.exception("Browser download failed for folder row %d; skipping it", idx)
+            continue
+    return downloaded
+
+
+def _download_single_item_via_browser(page: Any, dest_dir: Path) -> list[Path]:
+    """Single-file-preview shape: no row listing, just a page-level Download
+    control in the toolbar."""
+    control = page.get_by_role("button", name="Download", exact=False)
+    if control.count() == 0:
+        return []
+    with page.expect_download(timeout=_BROWSER_DOWNLOAD_TIMEOUT_MS) as dl_info:
+        control.first.click()
+    download = dl_info.value
+    target = dest_dir / download.suggested_filename
+    download.save_as(target)
+    return [target]
+
+
+def _download_via_browser(share_url: str, dest_dir: Path) -> list[Path]:
+    """Render `share_url` in a real headless browser and pull its files out
+    through OneDrive's own web UI, for the ambiguous "HTML but not a sign-in
+    redirect" case `download_anonymous_share` can't resolve with a plain GET.
+
+    Empirically fragile by nature (depends on OneDrive's current web UI
+    markup, which Microsoft can change without notice) -- prefer asking the
+    client for a plain file-level "Anyone" link, or `onedrive login` +
+    `onedrive fetch`, when either is available.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "The anonymous GET for this OneDrive link returned an HTML page instead "
+            "of raw file bytes (common for folder links migrated to SharePoint "
+            "Online), so falling back to a real browser. That needs Playwright: "
+            "pip install playwright && playwright install --with-deps chromium"
+        ) from exc
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=True,
+            # No sandbox: containers rarely grant the user-namespace/seccomp
+            # privileges Chromium's own sandbox wants, and this process
+            # already only ever renders one trusted, read-only OneDrive page.
+            args=["--no-sandbox"],
+        )
+        try:
+            context = browser.new_context(accept_downloads=True)
+            page = context.new_page()
+            page.goto(share_url, wait_until="networkidle", timeout=60_000)
+            page.wait_for_timeout(2000)  # let client-side rendering settle
+
+            if _url_is_signin_host(page.url):
+                raise RuntimeError(_SIGNIN_REQUIRED_MESSAGE)
+
+            downloaded = _download_all_rows_via_browser(page, dest_dir)
+            if not downloaded:
+                downloaded = _download_single_item_via_browser(page, dest_dir)
+            if not downloaded:
+                raise RuntimeError(
+                    "OneDrive rendered a page that isn't a recognizable file or "
+                    "folder listing -- the link may need a different sharing "
+                    "permission, or Microsoft has changed their web UI in a way "
+                    "this fallback doesn't yet handle."
+                )
+            return downloaded
+        finally:
+            browser.close()
 
 
 class OneDriveClient:

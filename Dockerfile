@@ -20,7 +20,8 @@ COPY README.md /app/README.md
 COPY docs /app/docs
 
 RUN pip install --upgrade pip \
-    && pip install .
+    && pip install . \
+    && playwright install --with-deps chromium
 
 RUN mkdir -p /app/input /app/output /app/debug /app/data /app/logs
 

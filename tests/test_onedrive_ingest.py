@@ -140,6 +140,47 @@ def test_download_anonymous_share_raises_when_link_requires_signin(monkeypatch, 
     )
     calls = iter([resolve_response, signin_response])
     monkeypatch.setattr(onedrive_ingest.requests, "get", lambda *a, **kw: next(calls))
+    browser_fallback_called = False
+
+    def fake_browser_fallback(*a, **kw):
+        nonlocal browser_fallback_called
+        browser_fallback_called = True
+        return []
+
+    monkeypatch.setattr(onedrive_ingest, "_download_via_browser", fake_browser_fallback)
 
     with pytest.raises(RuntimeError, match="requires signing in"):
         download_anonymous_share("https://1drv.ms/b/s!AbCdEf", tmp_path)
+    # A genuine sign-in-host redirect can't be helped by a browser either --
+    # the fallback must not even be attempted for this case.
+    assert browser_fallback_called is False
+
+
+def test_download_anonymous_share_falls_back_to_browser_for_html_non_signin_response(
+    monkeypatch, tmp_path: Path
+):
+    """The ambiguous shape found empirically: HTML body, but the final host
+    is OneDrive itself, not a Microsoft sign-in host -- e.g. a folder link
+    migrated to SharePoint Online that's genuinely browsable anonymously but
+    whose plain GET only returns the web-app shell."""
+    resolve_response = _FakeResponse("https://onedrive.live.com/?id=abc")
+    html_response = _FakeResponse(
+        "https://onedrive.live.com/?id=abc&download=1",
+        headers={"Content-Type": "text/html; charset=utf-8"},
+        content=b"<html>onedrive web app shell</html>",
+    )
+    calls = iter([resolve_response, html_response])
+    monkeypatch.setattr(onedrive_ingest.requests, "get", lambda *a, **kw: next(calls))
+
+    fallback_calls: list[tuple[str, Path]] = []
+
+    def fake_browser_fallback(share_url, dest_dir):
+        fallback_calls.append((share_url, dest_dir))
+        return [dest_dir / "recovered.pdf"]
+
+    monkeypatch.setattr(onedrive_ingest, "_download_via_browser", fake_browser_fallback)
+
+    downloaded = download_anonymous_share("https://1drv.ms/f/s!AbCdEf", tmp_path)
+
+    assert downloaded == [tmp_path / "recovered.pdf"]
+    assert fallback_calls == [("https://1drv.ms/f/s!AbCdEf", tmp_path)]
