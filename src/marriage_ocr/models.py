@@ -166,6 +166,11 @@ class ExtractedRecord:
     confidence: float = 0.0
     status_review: str = "REVIEW"
     review_reason: list[str] = field(default_factory=list)
+    # Which business fields are actually absent (as opposed to present-but-
+    # suspicious/invalid) -- a subset of review_reason's causes, named after
+    # exporter.py's XLSX column so a caller can map straight to "this column
+    # needs a value" instead of parsing free-text reasons.
+    missing_fields: list[str] = field(default_factory=list)
 
     source_file: str | None = None
     source_page: int | None = None

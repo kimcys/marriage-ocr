@@ -50,6 +50,7 @@ def test_validation_marks_good_record_ok() -> None:
 
     assert validated.status_review == "OK"
     assert validated.review_reason == []
+    assert validated.missing_fields == []
     assert validated.confidence >= 0.85
 
 
@@ -87,6 +88,13 @@ def test_validation_marks_bad_ocr_review_with_reasons() -> None:
     assert "missing wife name" in validated.review_reason
     assert "low OCR confidence" in validated.review_reason
     assert "low layout confidence" in validated.review_reason
+    # missing_fields is the structured (column-name) counterpart of
+    # review_reason's free text, used by marriage-be to render an editable
+    # input for exactly the fields that are actually absent.
+    assert "Nama Suami" in validated.missing_fields
+    assert "Nama Isteri" in validated.missing_fields
+    # "low OCR confidence"/"low layout confidence" aren't tied to one field.
+    assert len(validated.missing_fields) < len(validated.review_reason)
 
 
 def test_validation_marks_empty_ocr_failed() -> None:
@@ -136,6 +144,10 @@ def test_validation_flags_suspicious_all_identical_digit_ic() -> None:
 
     assert "suspicious wife IC (implausible digits)" in validated.review_reason
     assert validated.status_review != "OK"
+    # A present-but-suspicious IC isn't "missing" -- it already has a value
+    # to correct via the normal edit path, not a blank input.
+    assert "IC Lama Isteri" not in validated.missing_fields
+    assert "IC Baru Isteri" not in validated.missing_fields
 
 
 CERAI_CELL_RESULTS = {
@@ -196,6 +208,7 @@ def test_validate_record_cerai_requires_tarikh_cerai() -> None:
 
     assert validated.status_review == "REVIEW"
     assert "invalid or missing cerai date" in validated.review_reason
+    assert "Tarikh Cerai" in validated.missing_fields
 
 
 def test_validate_record_rujuk_ok_without_ages_present() -> None:
@@ -246,6 +259,40 @@ def test_validate_record_rujuk_flags_implausible_age_when_present() -> None:
     )
 
     assert "invalid husband age" in validated.review_reason
+    # Present-but-implausible, not absent -- umur_suami=5 has a value.
+    assert "Umur Suami" not in validated.missing_fields
+
+
+def test_validate_record_nikah_reports_all_missing_fields() -> None:
+    record = ExtractedRecord(
+        record_type="NIKAH",
+        bil="12",
+        nama_suami="MOHAMAD BIN YASMIN",
+        ic_lama_suami="A 1192345",
+        umur_suami=25,
+        nama_isteri="SITI BINTI ALI",
+        ic_baru_isteri="900101101234",
+        umur_isteri=23,
+        tarikh_nikah="1994-08-27",
+    )
+
+    validated = validate_record(
+        record,
+        {"bil": OcrResult(text="12", average_confidence=0.9)},
+        VALIDATION_CONFIG,
+        layout_confidence=1.0,
+        record_type="nikah",
+    )
+
+    assert set(validated.missing_fields) == {
+        "Mas Kahwin",
+        "Nama Pendaftar",
+        "Alamat Pendaftar",
+        "Nama Wali",
+        "Hubungan Wali",
+        "Saksi 1",
+        "Saksi 2",
+    }
 
 
 def test_validate_gemini_only_record_marks_good_record_ok_with_solid_confidence() -> None:

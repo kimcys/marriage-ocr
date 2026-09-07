@@ -65,6 +65,7 @@ XLSX_COLUMNS = [
     "Confidence",
     "Status Review",
     "Review Reason",
+    "Missing Fields",
     "Source File",
     "Source Page",
     "Source Record",
@@ -162,6 +163,7 @@ EXPORT_COLUMN_TO_FIELD = {
     "Status": "status_review",
     "Status Review": "status_review",
     "Review Reason": "review_reason",
+    "Missing Fields": "missing_fields",
     "Source File": "source_file",
     "Source Page": "source_page",
     "Source Record": "source_record",
@@ -438,7 +440,7 @@ def record_from_export_dict(data: Mapping[str, Any]) -> ExtractedRecord:
 
     for column, field_name in EXPORT_COLUMN_TO_FIELD.items():
         raw_value = data.get(column)
-        if field_name == "review_reason":
+        if field_name in {"review_reason", "missing_fields"}:
             payload[field_name] = _parse_review_reasons(raw_value)
             continue
         if field_name in {"umur_suami", "umur_isteri", "source_page"}:
@@ -509,6 +511,7 @@ def _record_to_row(record: ExtractedRecord) -> list[Any]:
         record.confidence,
         record.status_review,
         "; ".join(record.review_reason),
+        "; ".join(record.missing_fields),
         record.source_file,
         record.source_page,
         record.source_record,

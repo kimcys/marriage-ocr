@@ -38,7 +38,7 @@ def validate_record(
         return validated
 
     scorer = _SCORERS.get(str(record_type or "nikah").strip().lower(), _score_nikah)
-    reasons, critical, confidence = scorer(validated, validation_config)
+    reasons, missing_fields, critical, confidence = scorer(validated, validation_config)
 
     min_average_confidence = float(validation_config.get("min_average_confidence", 0.50))
     average_ocr_confidence = mean([result.average_confidence for result in nonempty_results])
@@ -52,6 +52,7 @@ def validate_record(
 
     validated.confidence = max(0.0, round(confidence, 4))
     validated.review_reason = _dedupe_preserve_order(reasons)
+    validated.missing_fields = _dedupe_preserve_order(missing_fields)
 
     ok_threshold = float(validation_config.get("ok_confidence_threshold", 0.85))
     validated.status_review = (
@@ -88,7 +89,7 @@ def validate_gemini_only_record(
     validated = replace(record, record_type=str(record_type or "nikah").strip().upper())
 
     scorer = _SCORERS.get(str(record_type or "nikah").strip().lower(), _score_nikah)
-    reasons, critical, confidence = scorer(validated, validation_config)
+    reasons, missing_fields, critical, confidence = scorer(validated, validation_config)
 
     if field_confidence:
         min_average_confidence = float(validation_config.get("min_average_confidence", 0.50))
@@ -106,6 +107,7 @@ def validate_gemini_only_record(
 
     validated.confidence = max(0.0, round(confidence, 4))
     validated.review_reason = _dedupe_preserve_order(reasons)
+    validated.missing_fields = _dedupe_preserve_order(missing_fields)
 
     ok_threshold = float(validation_config.get("ok_confidence_threshold", 0.85))
     validated.status_review = (
@@ -129,14 +131,18 @@ def parser_confidence_clears_threshold(record: ExtractedRecord, *, min_confidenc
     return record.status_review == "OK" and (record.confidence or 0.0) >= min_confidence
 
 
-def _score_nikah(validated: ExtractedRecord, validation_config: Mapping[str, Any]) -> tuple[list[str], bool, float]:
+def _score_nikah(
+    validated: ExtractedRecord, validation_config: Mapping[str, Any]
+) -> tuple[list[str], list[str], bool, float]:
     reasons: list[str] = []
+    missing_fields: list[str] = []
     critical = False
     confidence = 1.0
 
     if not validated.nama_suami:
         confidence -= 0.20
         reasons.append("missing husband name")
+        missing_fields.append("Nama Suami")
         critical = True
     elif _is_name_suspicious(validated.nama_suami):
         confidence -= 0.15
@@ -145,6 +151,7 @@ def _score_nikah(validated: ExtractedRecord, validation_config: Mapping[str, Any
     if not validated.nama_isteri:
         confidence -= 0.20
         reasons.append("missing wife name")
+        missing_fields.append("Nama Isteri")
         critical = True
     elif _is_name_suspicious(validated.nama_isteri):
         confidence -= 0.15
@@ -155,9 +162,13 @@ def _score_nikah(validated: ExtractedRecord, validation_config: Mapping[str, Any
     if not husband_ic_valid:
         confidence -= 0.15
         reasons.append("missing or invalid husband IC")
+        if not validated.ic_lama_suami and not validated.ic_baru_suami:
+            missing_fields.extend(["IC Lama Suami", "IC Baru Suami"])
     if not wife_ic_valid:
         confidence -= 0.15
         reasons.append("missing or invalid wife IC")
+        if not validated.ic_lama_isteri and not validated.ic_baru_isteri:
+            missing_fields.extend(["IC Lama Isteri", "IC Baru Isteri"])
     if not husband_ic_valid and not wife_ic_valid:
         critical = True
         reasons.append("missing both IC values")
@@ -172,16 +183,21 @@ def _score_nikah(validated: ExtractedRecord, validation_config: Mapping[str, Any
     if not _age_valid(validated.umur_suami, validation_config):
         confidence -= 0.10
         reasons.append("invalid husband age")
+        if validated.umur_suami is None:
+            missing_fields.append("Umur Suami")
         critical = True
 
     if not _age_valid(validated.umur_isteri, validation_config):
         confidence -= 0.10
         reasons.append("invalid wife age")
+        if validated.umur_isteri is None:
+            missing_fields.append("Umur Isteri")
         critical = True
 
     if bool(validation_config.get("require_mas_kahwin", True)) and not validated.mas_kahwin:
         confidence -= 0.10
         reasons.append("missing mas kahwin")
+        missing_fields.append("Mas Kahwin")
 
     if validated.mas_kahwin and validated.mas_kahwin_raw and "RM" not in validated.mas_kahwin_raw.upper():
         reasons.append("mas kahwin missing RM prefix")
@@ -189,6 +205,8 @@ def _score_nikah(validated: ExtractedRecord, validation_config: Mapping[str, Any
     if bool(validation_config.get("require_tarikh_nikah", True)) and not is_valid_date(validated.tarikh_nikah):
         confidence -= 0.10
         reasons.append("invalid nikah date")
+        if not validated.tarikh_nikah:
+            missing_fields.append("Tarikh Nikah")
         critical = True
 
     if validated.tarikh_keluar_raw and not is_valid_date(validated.tarikh_keluar):
@@ -197,23 +215,30 @@ def _score_nikah(validated: ExtractedRecord, validation_config: Mapping[str, Any
 
     if not validated.nama_pendaftar:
         reasons.append("missing pendaftar name")
+        missing_fields.append("Nama Pendaftar")
     if not validated.alamat_pendaftar:
         reasons.append("missing pendaftar address")
+        missing_fields.append("Alamat Pendaftar")
     if not validated.nama_wali:
         reasons.append("missing wali name")
+        missing_fields.append("Nama Wali")
     if not validated.hubungan_wali:
         reasons.append("missing wali relationship")
+        missing_fields.append("Hubungan Wali")
     if not validated.saksi_1:
         reasons.append("missing saksi 1")
+        missing_fields.append("Saksi 1")
     if not validated.saksi_2:
         reasons.append("missing saksi 2")
+        missing_fields.append("Saksi 2")
 
-    return reasons, critical, confidence
+    return reasons, missing_fields, critical, confidence
 
 
 def _score_spouse_pair_ic(
     validated: ExtractedRecord,
     reasons: list[str],
+    missing_fields: list[str],
     confidence: float,
 ) -> tuple[float, bool]:
     """Shared IC scoring for Cerai/Rujuk, which use one ic_suami/ic_isteri
@@ -224,9 +249,13 @@ def _score_spouse_pair_ic(
     if not husband_ic_valid:
         confidence -= 0.15
         reasons.append("missing or invalid husband IC")
+        if not validated.ic_suami:
+            missing_fields.append("IC Suami")
     if not wife_ic_valid:
         confidence -= 0.15
         reasons.append("missing or invalid wife IC")
+        if not validated.ic_isteri:
+            missing_fields.append("IC Isteri")
     if not husband_ic_valid and not wife_ic_valid:
         critical = True
         reasons.append("missing both IC values")
@@ -241,11 +270,14 @@ def _score_spouse_pair_ic(
     return confidence, critical
 
 
-def _score_names(validated: ExtractedRecord, reasons: list[str], confidence: float) -> tuple[float, bool]:
+def _score_names(
+    validated: ExtractedRecord, reasons: list[str], missing_fields: list[str], confidence: float
+) -> tuple[float, bool]:
     critical = False
     if not validated.nama_suami:
         confidence -= 0.20
         reasons.append("missing husband name")
+        missing_fields.append("Nama Suami")
         critical = True
     elif _is_name_suspicious(validated.nama_suami):
         confidence -= 0.15
@@ -254,6 +286,7 @@ def _score_names(validated: ExtractedRecord, reasons: list[str], confidence: flo
     if not validated.nama_isteri:
         confidence -= 0.20
         reasons.append("missing wife name")
+        missing_fields.append("Nama Isteri")
         critical = True
     elif _is_name_suspicious(validated.nama_isteri):
         confidence -= 0.15
@@ -262,38 +295,46 @@ def _score_names(validated: ExtractedRecord, reasons: list[str], confidence: flo
     return confidence, critical
 
 
-def _score_cerai(validated: ExtractedRecord, validation_config: Mapping[str, Any]) -> tuple[list[str], bool, float]:
+def _score_cerai(
+    validated: ExtractedRecord, validation_config: Mapping[str, Any]
+) -> tuple[list[str], list[str], bool, float]:
     reasons: list[str] = []
+    missing_fields: list[str] = []
     confidence = 1.0
     critical = False
 
-    confidence, name_critical = _score_names(validated, reasons, confidence)
+    confidence, name_critical = _score_names(validated, reasons, missing_fields, confidence)
     critical = critical or name_critical
 
-    confidence, ic_critical = _score_spouse_pair_ic(validated, reasons, confidence)
+    confidence, ic_critical = _score_spouse_pair_ic(validated, reasons, missing_fields, confidence)
     critical = critical or ic_critical
 
     if bool(validation_config.get("require_tarikh_cerai", True)) and not is_valid_date(validated.tarikh_cerai):
         confidence -= 0.10
         reasons.append("invalid or missing cerai date")
+        if not validated.tarikh_cerai:
+            missing_fields.append("Tarikh Cerai")
         critical = True
 
     if validated.tarikh_keluar_raw and not is_valid_date(validated.tarikh_keluar):
         confidence -= 0.10
         reasons.append("invalid keluar date")
 
-    return reasons, critical, confidence
+    return reasons, missing_fields, critical, confidence
 
 
-def _score_rujuk(validated: ExtractedRecord, validation_config: Mapping[str, Any]) -> tuple[list[str], bool, float]:
+def _score_rujuk(
+    validated: ExtractedRecord, validation_config: Mapping[str, Any]
+) -> tuple[list[str], list[str], bool, float]:
     reasons: list[str] = []
+    missing_fields: list[str] = []
     confidence = 1.0
     critical = False
 
-    confidence, name_critical = _score_names(validated, reasons, confidence)
+    confidence, name_critical = _score_names(validated, reasons, missing_fields, confidence)
     critical = critical or name_critical
 
-    confidence, ic_critical = _score_spouse_pair_ic(validated, reasons, confidence)
+    confidence, ic_critical = _score_spouse_pair_ic(validated, reasons, missing_fields, confidence)
     critical = critical or ic_critical
 
     # Ages are only present on the legacy layout -- soft check only, not
@@ -308,13 +349,15 @@ def _score_rujuk(validated: ExtractedRecord, validation_config: Mapping[str, Any
     if bool(validation_config.get("require_tarikh_rujuk", True)) and not is_valid_date(validated.tarikh_rujuk):
         confidence -= 0.10
         reasons.append("invalid or missing rujuk date")
+        if not validated.tarikh_rujuk:
+            missing_fields.append("Tarikh Rujuk")
         critical = True
 
     if validated.tarikh_keluar_raw and not is_valid_date(validated.tarikh_keluar):
         confidence -= 0.10
         reasons.append("invalid keluar date")
 
-    return reasons, critical, confidence
+    return reasons, missing_fields, critical, confidence
 
 
 _SCORERS = {

@@ -1,5 +1,6 @@
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 import csv
 
@@ -200,6 +201,18 @@ def test_exporter_round_trips_export_dict() -> None:
     assert restored.confidence == record.confidence
     assert restored.status_review == record.status_review
     assert restored.source_page == record.source_page
+    assert restored.missing_fields == record.missing_fields
+
+
+def test_exporter_round_trips_missing_fields() -> None:
+    record = _make_record(source_record="record_002")
+    record = replace(record, missing_fields=["Nama Wali", "Saksi 1"])
+
+    exported = record_to_export_dict(record, timestamp="2026-05-25T12:00:00")
+    assert exported["Missing Fields"] == "Nama Wali; Saksi 1"
+
+    restored = record_from_export_dict(exported)
+    assert restored.missing_fields == ["Nama Wali", "Saksi 1"]
 
 
 def test_exporter_round_trips_public_export_dict() -> None:
