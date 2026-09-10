@@ -184,3 +184,344 @@ def test_download_anonymous_share_falls_back_to_browser_for_html_non_signin_resp
 
     assert downloaded == [tmp_path / "recovered.pdf"]
     assert fallback_calls == [("https://1drv.ms/f/s!AbCdEf", tmp_path)]
+
+
+# --- Nested-folder / virtualized-listing browser fallback -----------------
+#
+# Real client share links turned out to be OneDrive folders that are
+# themselves full of sub-folders (category -> district -> year -> files, up
+# to 3-4 levels deep) rather than a flat list of files, and some individual
+# folders hold hundreds or thousands of items. OneDrive's web UI virtualizes
+# that listing (only ~30-60 rows exist in the DOM at once; scrolling its own
+# container lazily grows how much is loaded) rather than rendering
+# everything up front. These tests exercise that against lightweight fakes
+# standing in for Playwright's page/locator objects -- no real browser or
+# network involved.
+
+
+class _FakeIcon:
+    def __init__(self, aria_label):
+        self._aria_label = aria_label
+
+    def get_attribute(self, name):
+        return self._aria_label if name == "aria-label" else None
+
+
+class _FakeLocatorList:
+    def __init__(self, items):
+        self._items = items
+
+    def count(self):
+        return len(self._items)
+
+    def nth(self, i):
+        return self._items[i]
+
+    @property
+    def first(self):
+        return self._items[0]
+
+
+class _FakeTextCell:
+    def __init__(self, text):
+        self._text = text
+
+    def count(self):
+        return 1
+
+    def inner_text(self):
+        return self._text
+
+
+class _FakeIconCell:
+    def __init__(self, icons):
+        self._icons = icons
+
+    def locator(self, selector):
+        assert selector == "i[role='img']"
+        return _FakeLocatorList(self._icons)
+
+
+class _Node:
+    def __init__(self, name, is_folder, children=None):
+        self.name = name
+        self.is_folder = is_folder
+        self.children = children or []
+
+
+class _FakeMoreButton:
+    def __init__(self, page, node):
+        self._page = page
+        self._node = node
+
+    def click(self, timeout=None):
+        self._page._menu_target = self._node
+
+
+class _FakeMenuItem:
+    def __init__(self, page):
+        self._page = page
+
+    def click(self, timeout=None):
+        self._page._pending_download = self._page._menu_target
+        self._page._menu_target = None
+
+
+class _FakeDownload:
+    def __init__(self, filename):
+        self.suggested_filename = filename
+
+    def save_as(self, path):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fake-bytes")
+
+
+class _FakeDownloadInfo:
+    def __init__(self, page):
+        self._page = page
+
+    @property
+    def value(self):
+        return _FakeDownload(self._page._pending_download.name)
+
+
+class _FakeExpectDownload:
+    def __init__(self, page):
+        self._page = page
+
+    def __enter__(self):
+        return _FakeDownloadInfo(self._page)
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _FakeRow:
+    def __init__(self, page, node):
+        self._page = page
+        self.node = node
+
+    def locator(self, selector):
+        if selector == '[data-automationid="field-LinkFilename"]':
+            return _FakeTextCell(self.node.name)
+        if selector == '[data-automationid="field-DocIcon"]':
+            icons = [_FakeIcon("Yellow folder")] if self.node.is_folder else []
+            return _FakeIconCell(icons)
+        raise AssertionError(f"unexpected selector {selector!r}")
+
+    def scroll_into_view_if_needed(self):
+        pass
+
+    def hover(self):
+        pass
+
+    def dblclick(self, timeout=None):
+        self._page.path = [*self._page.path, self.node.name]
+
+    def get_by_label(self, label):
+        assert label == "Show more actions for this item"
+        return _FakeLocatorList([_FakeMoreButton(self._page, self.node)])
+
+
+class _FakeRowList:
+    def __init__(self, nodes, page):
+        self._rows = [None, *(_FakeRow(page, node) for node in nodes)]
+
+    def count(self):
+        return len(self._rows)
+
+    def nth(self, i):
+        return self._rows[i]
+
+
+class _FakeAbsentContainer:
+    """Stands in for `.odspSpartanList` when it isn't found -- exercised by
+    the nested-folder test, which doesn't care about virtualization."""
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        return 0
+
+
+class _FakeKeyboard:
+    def press(self, key):
+        pass
+
+
+class _FakeNestedFolderPage:
+    """A tiny fake OneDrive listing page backed by an in-memory folder tree,
+    supporting exactly the page/locator calls `_download_all_rows_via_browser`
+    makes -- enough to prove recursion into sub-folders (and returning to
+    the parent listing afterwards) works, without a real browser."""
+
+    def __init__(self, tree):
+        self._tree = tree
+        self.path: list[str] = []
+        self.keyboard = _FakeKeyboard()
+        self._menu_target = None
+        self._pending_download = None
+
+    def _current_node(self):
+        node = self._tree
+        for name in self.path:
+            node = next(c for c in node.children if c.name == name)
+        return node
+
+    @property
+    def url(self):
+        return "fake://" + "/".join(self.path)
+
+    def get_by_role(self, role, name=None, exact=None):
+        if role == "row":
+            return _FakeRowList(self._current_node().children, self)
+        if role == "menuitem":
+            items = [_FakeMenuItem(self)] if self._menu_target is not None else []
+            return _FakeLocatorList(items)
+        raise AssertionError(f"unexpected role {role!r}")
+
+    def locator(self, selector):
+        assert selector == onedrive_ingest._LIST_SCROLL_CONTAINER_SELECTOR
+        return _FakeAbsentContainer()
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def wait_for_load_state(self, state, timeout=None):
+        pass
+
+    def goto(self, url, wait_until=None, timeout=None):
+        assert url.startswith("fake://")
+        rest = url[len("fake://") :]
+        self.path = rest.split("/") if rest else []
+
+    def expect_download(self, timeout=None):
+        return _FakeExpectDownload(self)
+
+
+def test_download_all_rows_via_browser_recurses_into_sub_folders(tmp_path: Path):
+    tree = _Node(
+        "root",
+        True,
+        [
+            _Node("SubA", True, [_Node("file_a.pdf", False)]),
+            _Node("file_root.pdf", False),
+        ],
+    )
+    page = _FakeNestedFolderPage(tree)
+
+    downloaded = onedrive_ingest._download_all_rows_via_browser(page, tmp_path)
+
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in downloaded) == [
+        "SubA/file_a.pdf",
+        "file_root.pdf",
+    ]
+    assert (tmp_path / "SubA" / "file_a.pdf").read_bytes() == b"fake-bytes"
+    assert (tmp_path / "file_root.pdf").read_bytes() == b"fake-bytes"
+    # Recursing back out must leave the listing where it started.
+    assert page.path == []
+
+
+def test_download_all_rows_via_browser_handles_multiple_nesting_levels(tmp_path: Path):
+    tree = _Node(
+        "root",
+        True,
+        [
+            _Node(
+                "1990 NIKAH",
+                True,
+                [_Node("Daerah Petaling Jaya", True, [_Node("scan1.pdf", False)])],
+            ),
+        ],
+    )
+    page = _FakeNestedFolderPage(tree)
+
+    downloaded = onedrive_ingest._download_all_rows_via_browser(page, tmp_path)
+
+    assert [p.relative_to(tmp_path).as_posix() for p in downloaded] == [
+        "1990 NIKAH/Daerah Petaling Jaya/scan1.pdf",
+    ]
+
+
+def test_row_is_folder_detects_folder_icon_by_aria_label_substring():
+    page = _FakeNestedFolderPage(_Node("root", True, []))
+    folder_row = _FakeRow(page, _Node("Some Folder", True))
+    file_row = _FakeRow(page, _Node("some_file.pdf", False))
+
+    assert onedrive_ingest._row_is_folder(folder_row) is True
+    assert onedrive_ingest._row_is_folder(file_row) is False
+
+
+def test_next_unprocessed_row_scrolls_virtualized_container_to_find_all_rows():
+    """Simulates OneDrive's virtualized listing: only a growing window of
+    rows exists in the DOM at once, and the scroll container's own
+    `evaluate` calls are what grow it -- confirmed empirically against a
+    real 2,244-item folder (61 DOM rows at rest, more only after scrolling
+    the list container, not the page)."""
+    names = [f"file_{i}.pdf" for i in range(10)]
+
+    class _Window:
+        exposed = 3
+
+    class _ScrollingRows:
+        def count(self):
+            return 1 + min(_Window.exposed, len(names))
+
+        def nth(self, i):
+            return _FakeTextCellRow(names[i - 1])
+
+    class _FakeTextCellRow:
+        def __init__(self, name):
+            self._name = name
+
+        def locator(self, selector):
+            assert selector == '[data-automationid="field-LinkFilename"]'
+            return _FakeTextCell(self._name)
+
+    class _ScrollingContainer:
+        @property
+        def first(self):
+            return self
+
+        def count(self):
+            return 1
+
+        def evaluate(self, script):
+            if "el.scrollTop = el.scrollTop" in script:
+                _Window.exposed = min(_Window.exposed + 3, len(names))
+                return None
+            at_bottom = _Window.exposed >= len(names)
+            return {
+                "scrollTop": 100 if at_bottom else 0,
+                "scrollHeight": 100,
+                "clientHeight": 100 if at_bottom else 10,
+            }
+
+    class _FakePage:
+        def get_by_role(self, role, name=None, exact=None):
+            assert role == "row"
+            return _ScrollingRows()
+
+        def locator(self, selector):
+            assert selector == onedrive_ingest._LIST_SCROLL_CONTAINER_SELECTOR
+            return _ScrollingContainer()
+
+        def wait_for_timeout(self, ms):
+            pass
+
+    page = _FakePage()
+    seen: set[str] = set()
+    discovered = []
+    for _ in range(20):
+        found = onedrive_ingest._next_unprocessed_row(page, seen)
+        if found is None:
+            break
+        name, _row = found
+        seen.add(name)
+        discovered.append(name)
+
+    assert discovered == names
+    assert onedrive_ingest._next_unprocessed_row(page, seen) is None

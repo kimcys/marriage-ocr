@@ -192,33 +192,132 @@ def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]
     return [local_path]
 
 
-# Safety cap on how many items a single browser-driven folder download will
-# process -- each one is a real UI-driven download, not a bulk zip (see
+# Safety cap on how many items a single folder *listing* (one level) will
+# process -- each file is a real UI-driven download, not a bulk zip (see
 # _download_all_rows_via_browser), so an unbounded folder could otherwise
-# hold a worker for a very long time.
+# hold a worker for a very long time. Applied independently at every level
+# of the tree, not as one global budget across the whole share.
 _MAX_BROWSER_DOWNLOAD_ITEMS = 300
 _BROWSER_DOWNLOAD_TIMEOUT_MS = 60_000
 
+# Safety cap on how deep `_download_all_rows_via_browser` will recurse into
+# nested sub-folders, purely to bound a pathological/cyclic tree -- real
+# client folders observed so far (category / district / year / files) only
+# go three or four levels deep.
+_MAX_BROWSER_FOLDER_DEPTH = 12
 
-def _download_all_rows_via_browser(page: Any, dest_dir: Path) -> list[Path]:
-    """Folder-listing shape: one row per file, each with its own "..." (Show
-    more actions) menu. Downloads each file individually via that per-row
-    menu's "Download" item -- not the shared multi-select toolbar, which
-    empirically never fired a download event for a multi-file selection on
-    this same page shape."""
-    rows = page.get_by_role("row")
-    total = rows.count()
-    if total <= 1:  # only the header row, or no rows at all
-        return []
-    if total - 1 > _MAX_BROWSER_DOWNLOAD_ITEMS:
+# The listing's own scroll container (observed empirically in OneDrive's
+# current web UI: class name is auto-generated but always carries this
+# stable "odspSpartanList" token). OneDrive virtualizes this list -- for a
+# folder bigger than a screenful it keeps only a sliding window of ~30-60
+# rows in the DOM and lazily grows `scrollHeight` as you scroll, rather than
+# rendering every row up front. A single, un-scrolled `get_by_role("row")`
+# snapshot therefore silently sees only the first screenful of a large
+# folder (confirmed against a real 2,244-item folder: 61 DOM rows at rest,
+# more only after scrolling the container, not the page).
+_LIST_SCROLL_CONTAINER_SELECTOR = ".odspSpartanList"
+
+
+def _row_name(row: Any, *, fallback: str) -> str:
+    """The display name OneDrive shows for this row (file or folder)."""
+    name_cell = row.locator('[data-automationid="field-LinkFilename"]')
+    if name_cell.count() == 0:
+        return fallback
+    try:
+        text = name_cell.inner_text().strip()
+    except Exception:
+        return fallback
+    return text or fallback
+
+
+def _row_is_folder(row: Any) -> bool:
+    """True if `row` is a sub-folder rather than a file.
+
+    Confirmed empirically: a folder row's icon cell has an `i[role="img"]`
+    whose `aria-label` names the folder colour (e.g. "Yellow folder"); a
+    file row instead has a plain `<img alt=".pdf">`-style icon with no such
+    element. Checking for the substring "folder" (rather than an exact
+    label) covers every folder colour OneDrive assigns, not just yellow.
+    """
+    icon_cell = row.locator('[data-automationid="field-DocIcon"]')
+    icons = icon_cell.locator("i[role='img']")
+    for i in range(icons.count()):
+        label = icons.nth(i).get_attribute("aria-label") or ""
+        if "folder" in label.lower():
+            return True
+    return False
+
+
+def _next_unprocessed_row(page: Any, seen: set[str]) -> tuple[str, Any] | None:
+    """One pass over the current folder listing, returning the first row
+    whose name isn't in `seen` yet -- scrolling the virtualized list
+    container forward (see `_LIST_SCROLL_CONTAINER_SELECTOR`) when the
+    rows currently in the DOM are exhausted but the folder isn't. Returns
+    None once nothing new turns up (folder fully listed, or scrolling twice
+    in a row at the bottom yields no new row)."""
+    container = page.locator(_LIST_SCROLL_CONTAINER_SELECTOR).first
+    stable_passes_at_bottom = 0
+    while True:
+        rows = page.get_by_role("row")
+        total = rows.count()
+        for idx in range(1, total):
+            row = rows.nth(idx)
+            try:
+                name = _row_name(row, fallback=f"item-{idx}")
+            except Exception:
+                continue
+            if name not in seen:
+                return name, row
+
+        if container.count() == 0 or len(seen) >= _MAX_BROWSER_DOWNLOAD_ITEMS:
+            return None
+
+        try:
+            metrics = container.evaluate(
+                "el => ({scrollTop: el.scrollTop, scrollHeight: el.scrollHeight,"
+                " clientHeight: el.clientHeight})"
+            )
+        except Exception:
+            return None
+        at_bottom = metrics["scrollTop"] + metrics["clientHeight"] >= metrics["scrollHeight"] - 2
+        stable_passes_at_bottom = stable_passes_at_bottom + 1 if at_bottom else 0
+        if stable_passes_at_bottom >= 2:
+            return None
+
+        container.evaluate("el => { el.scrollTop = el.scrollTop + el.clientHeight; }")
+        page.wait_for_timeout(400)
+
+
+def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0) -> list[Path]:
+    """Folder-listing shape: one row per file or sub-folder, each with its
+    own "..." (Show more actions) menu. Downloads each file individually via
+    that per-row menu's "Download" item -- not the shared multi-select
+    toolbar, which empirically never fired a download event for a
+    multi-file selection on this same page shape. A sub-folder row is
+    entered (double-click navigates in, matching OneDrive's own
+    `list-item-db-click` row action) and mirrored recursively into a
+    same-named local sub-directory, so a share with categories/districts/
+    years nested above the actual files gets fully walked, not just its
+    top level.
+    """
+    if _depth > _MAX_BROWSER_FOLDER_DEPTH:
         LOGGER.warning(
-            "Folder listing has %d items; only downloading the first %d.",
-            total - 1,
-            _MAX_BROWSER_DOWNLOAD_ITEMS,
+            "Folder nesting under %s exceeds %d levels; not descending further.",
+            dest_dir,
+            _MAX_BROWSER_FOLDER_DEPTH,
         )
+        return []
 
+    listing_url = page.url
     downloaded: list[Path] = []
-    for idx in range(1, min(total, _MAX_BROWSER_DOWNLOAD_ITEMS + 1)):
+    seen: set[str] = set()
+
+    while len(seen) < _MAX_BROWSER_DOWNLOAD_ITEMS:
+        found = _next_unprocessed_row(page, seen)
+        if found is None:
+            break
+        name, row = found
+        seen.add(name)
         try:
             # A prior row's click/selection can leave a stray overlay
             # ("SelectionZone") intercepting pointer events on the next
@@ -226,9 +325,25 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path) -> list[Path]:
             # failure) is what actually made this reliable past the first
             # few rows in practice.
             page.keyboard.press("Escape")
-            row = rows.nth(idx)
             row.scroll_into_view_if_needed()
             row.hover()
+
+            if _row_is_folder(row):
+                row.dblclick(timeout=10_000)
+                page.wait_for_load_state("networkidle", timeout=30_000)
+                page.wait_for_timeout(1000)  # let the new listing's rows settle
+                downloaded.extend(
+                    _download_all_rows_via_browser(page, dest_dir / name, _depth=_depth + 1)
+                )
+                # Re-fetching the row list (rather than trying to resume the
+                # one we navigated away from) after returning from a
+                # sub-folder resets the virtualized listing to the top --
+                # `seen` is what lets `_next_unprocessed_row` fast-forward
+                # past everything already handled instead of redoing it.
+                page.goto(listing_url, wait_until="networkidle", timeout=30_000)
+                page.wait_for_timeout(1000)
+                continue
+
             more_button = row.get_by_label("Show more actions for this item")
             if more_button.count() == 0:
                 continue
@@ -241,14 +356,24 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path) -> list[Path]:
             with page.expect_download(timeout=_BROWSER_DOWNLOAD_TIMEOUT_MS) as dl_info:
                 menu_item.first.click(timeout=10_000)
             download = dl_info.value
+            dest_dir.mkdir(parents=True, exist_ok=True)
             target = dest_dir / download.suggested_filename
             download.save_as(target)
             downloaded.append(target)
         except Exception:
             # One stuck/overlay-covered row shouldn't sacrifice every other
-            # file in the folder -- log and move on to the next row.
-            LOGGER.exception("Browser download failed for folder row %d; skipping it", idx)
+            # item in the folder -- log and move on to the next row.
+            LOGGER.exception("Browser download failed for folder row %r; skipping it", name)
             continue
+
+    if len(seen) >= _MAX_BROWSER_DOWNLOAD_ITEMS:
+        LOGGER.warning(
+            "Folder listing at %s has more than %d items; only processing the first %d.",
+            dest_dir,
+            _MAX_BROWSER_DOWNLOAD_ITEMS,
+            _MAX_BROWSER_DOWNLOAD_ITEMS,
+        )
+
     return downloaded
 
 
