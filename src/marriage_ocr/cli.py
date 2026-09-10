@@ -349,10 +349,13 @@ def process_typed(
     try:
         cfg, _, runtime = _load_command_runtime("process-typed", config_path)
         logger = get_logger("marriage_ocr.process_typed")
+        retain_debug_artifacts = bool(cfg.get("debug", {}).get("retain_artifacts", False))
         console.print("[bold green]Marriage OCR typed process started[/bold green]")
         console.print(f"Input: {input_path}")
         console.print(f"Output: {output_path}")
-        console.print(f"Debug artifacts: {debug_path}")
+        console.print(
+            f"Debug artifacts: {'retained at ' + str(debug_path) if retain_debug_artifacts else 'disabled'}"
+        )
         console.print(f"Config: {config_path}")
         console.print(f"Log file: {runtime.log_path}")
         console.print(f"Reset output: {reset_output}")
@@ -380,6 +383,7 @@ def process_typed(
             config_path=config_path,
             reset_output=reset_output,
             skip_existing=skip_existing,
+            retain_debug_artifacts=retain_debug_artifacts,
         )
         console.print(
             f"Typed OCR complete: discovered={result.discovered_pdfs} written={result.written_rows} skipped={len(result.skipped_files)}"

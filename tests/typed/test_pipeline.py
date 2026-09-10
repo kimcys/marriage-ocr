@@ -123,6 +123,92 @@ typed:
     assert all(record.processing_status is ProcessingStatus.SUCCESS for record in result.records)
 
 
+_TYPED_CONFIG_TEXT = """
+ocr:
+  google_vision:
+    language_hints: [ms, en]
+typed:
+  pdf_dpi: 300
+  pdf_batch_size: 4
+  render_workers: 4
+  word_confidence_threshold: 0.75
+  region_boundary_tolerance: 0.01
+  retry:
+    api_attempts: 3
+    initial_delay_seconds: 1
+    backoff_multiplier: 2
+    max_fields_per_pdf: 6
+    crop_padding_ratio: 0.05
+    request_batch_size: 16
+  validation:
+    min_age: 16
+    max_age: 120
+""".strip()
+
+
+def test_process_typed_input_does_not_retain_debug_artifacts_by_default(monkeypatch, tmp_path: Path) -> None:
+    """Debug PNGs (rendered pages, region overlays) are the overwhelming
+    majority of stored bytes for a real import and existed only to eyeball a
+    bad extraction -- so unless a caller opts in, they must land in a
+    throwaway temp dir, not `debug_path`, and the record must not carry a
+    crop_folder pointing at output that won't persist."""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_two_page_pdf(input_dir / "a.pdf")
+
+    monkeypatch.setattr(
+        "marriage_ocr.typed.pipeline._ocr_micro_batch",
+        lambda pages, client: _synthetic_complete_page_results(pages),
+    )
+
+    config_path = tmp_path / "typed.yaml"
+    config_path.write_text(_TYPED_CONFIG_TEXT, encoding="utf-8")
+    debug_path = tmp_path / "debug"
+
+    result = process_typed_input(
+        input_path=input_dir,
+        output_path=tmp_path / "typed_records.csv",
+        debug_path=debug_path,
+        config_path=config_path,
+        reset_output=True,
+        retain_debug_artifacts=False,
+    )
+
+    assert result.records[0].processing_status is ProcessingStatus.SUCCESS
+    assert result.records[0].record.crop_folder is None
+    assert not debug_path.exists()
+
+
+def test_process_typed_input_retains_debug_artifacts_when_configured(monkeypatch, tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_two_page_pdf(input_dir / "a.pdf")
+
+    monkeypatch.setattr(
+        "marriage_ocr.typed.pipeline._ocr_micro_batch",
+        lambda pages, client: _synthetic_complete_page_results(pages),
+    )
+
+    config_path = tmp_path / "typed.yaml"
+    config_path.write_text(_TYPED_CONFIG_TEXT, encoding="utf-8")
+    debug_path = tmp_path / "debug"
+
+    result = process_typed_input(
+        input_path=input_dir,
+        output_path=tmp_path / "typed_records.csv",
+        debug_path=debug_path,
+        config_path=config_path,
+        reset_output=True,
+        retain_debug_artifacts=True,
+    )
+
+    document_debug_dir = debug_path / "a"
+    assert result.records[0].record.crop_folder == str(document_debug_dir)
+    assert (document_debug_dir / "page_1_regions.png").exists()
+    assert (document_debug_dir / "page_2_regions.png").exists()
+    assert (document_debug_dir / "validation.json").exists()
+
+
 def test_pipeline_marks_failed_row_for_one_page_pdf(monkeypatch, tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()

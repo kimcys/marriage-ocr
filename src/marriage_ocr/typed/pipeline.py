@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, is_dataclass
@@ -231,6 +232,7 @@ def _process_single_pdf(
     ocr_results_by_page: Mapping[tuple[str, int], PageOcrResult] | None = None,
     template_name: str = "borang_4b",
     record_type: str = "NIKAH",
+    retain_debug_artifacts: bool = True,
 ) -> TypedDocumentResult:
     source_file = pdf.name
     source_stem = pdf.stem
@@ -333,7 +335,11 @@ def _process_single_pdf(
     record.source_file = source_file
     record.source_page = 1
     record.source_record = source_stem
-    record.crop_folder = str(document_debug_dir)
+    # Mirrors pipeline.py's _blank_parsed_record: don't leave a record
+    # pointing at a debug dir that's about to be thrown away (see
+    # _run_typed_micro_batches, which redirects `document_debug_dir`'s
+    # ancestor to a temp workspace whenever debug artifacts aren't retained).
+    record.crop_folder = str(document_debug_dir) if retain_debug_artifacts else None
     _write_json(document_debug_dir / "extracted_normalised.json", asdict(record))
     return TypedDocumentResult(
         record=record,
@@ -354,6 +360,7 @@ def _process_micro_batch(
     validation_cfg: Mapping[str, object],
     template_name: str = "borang_4b",
     record_type: str = "NIKAH",
+    retain_debug_artifacts: bool = True,
 ) -> tuple[TypedDocumentResult, ...]:
     render_workers = max(1, int(typed_cfg.get("render_workers", 4)))
     expected_pages = int(TEMPLATES[template_name]["pages"])
@@ -421,6 +428,7 @@ def _process_micro_batch(
                     ocr_results_by_page=ocr_results_by_page,
                     template_name=template_name,
                     record_type=record_type,
+                    retain_debug_artifacts=retain_debug_artifacts,
                 )
             )
         except Exception as error:
@@ -435,6 +443,7 @@ def _run_typed_micro_batches(
     config_path: Path,
     on_results: Callable[[list[TypedDocumentResult]], None],
     progress_callback: ProgressCallback | None = None,
+    retain_debug_artifacts: bool | None = None,
 ) -> list[TypedDocumentResult]:
     """Shared OCR+parse+validate core, config-sized micro-batch at a time.
 
@@ -445,14 +454,35 @@ def _run_typed_micro_batches(
     which is what lets `process_typed_documents_no_csv` below call this
     safely from multiple threads at once (unlike `TypedCsvStore`, nothing
     here is shared mutable state across calls).
+
+    Per-document debug output (rendered pages, region-overlay PNGs, raw/
+    validation JSON) is written unconditionally by `_process_single_pdf`,
+    but *where* it lands depends on `retain_debug_artifacts` -- same
+    `debug.retain_artifacts` config toggle, and same temp-workspace
+    redirect, as pipeline.py's Vision path and gemini_page_pipeline.py.
+    Debug PNGs alone were the overwhelming majority of stored bytes for a
+    real import at this scale, for output nobody was retaining on purpose.
     """
     loaded = load_runtime_config(config_path)
     typed_cfg = dict(loaded.data.get("typed", {}))
     retry_cfg = dict(typed_cfg.get("retry", {}))
     validation_cfg = dict(typed_cfg.get("validation", {}))
     vision_cfg = dict(loaded.data.get("ocr", {}).get("google_vision", {}))
+    debug_cfg = dict(loaded.data.get("debug", {}))
     template_name = str(typed_cfg.get("template", "borang_4b"))
     record_type = str(loaded.data.get("record_type", "NIKAH")).upper()
+
+    if retain_debug_artifacts is None:
+        retain_debug_artifacts = bool(debug_cfg.get("retain_artifacts", False))
+
+    temp_debug_workspace: tempfile.TemporaryDirectory[str] | None = None
+    debug_root = debug_path
+    if retain_debug_artifacts:
+        debug_root.mkdir(parents=True, exist_ok=True)
+    else:
+        temp_debug_workspace = tempfile.TemporaryDirectory(prefix="marriage-ocr-typed-debug-")
+        debug_root = Path(temp_debug_workspace.name)
+
     client = TypedVisionClient(
         language_hints=tuple(vision_cfg.get("language_hints", ("ms", "en"))),
         api_attempts=int(retry_cfg.get("api_attempts", 3)),
@@ -460,28 +490,33 @@ def _run_typed_micro_batches(
         backoff_multiplier=float(retry_cfg.get("backoff_multiplier", 2)),
         request_batch_size=int(retry_cfg.get("request_batch_size", 16)),
     )
-    completed: list[TypedDocumentResult] = []
-    batch_size = int(typed_cfg.get("pdf_batch_size", 4))
-    for start in range(0, len(pending), batch_size):
-        micro_batch = pending[start : start + batch_size]
-        batch_results = _process_micro_batch(
-            pdfs=micro_batch,
-            debug_path=debug_path,
-            client=client,
-            typed_cfg=typed_cfg,
-            retry_cfg=retry_cfg,
-            validation_cfg=validation_cfg,
-            template_name=template_name,
-            record_type=record_type,
-        )
-        on_results(list(batch_results))
-        completed.extend(batch_results)
-        if progress_callback is not None:
-            progress_callback(
-                f"Processed {min(start + batch_size, len(pending))}/{len(pending)} typed PDF(s)"
+    try:
+        completed: list[TypedDocumentResult] = []
+        batch_size = int(typed_cfg.get("pdf_batch_size", 4))
+        for start in range(0, len(pending), batch_size):
+            micro_batch = pending[start : start + batch_size]
+            batch_results = _process_micro_batch(
+                pdfs=micro_batch,
+                debug_path=debug_root,
+                client=client,
+                typed_cfg=typed_cfg,
+                retry_cfg=retry_cfg,
+                validation_cfg=validation_cfg,
+                template_name=template_name,
+                record_type=record_type,
+                retain_debug_artifacts=retain_debug_artifacts,
             )
+            on_results(list(batch_results))
+            completed.extend(batch_results)
+            if progress_callback is not None:
+                progress_callback(
+                    f"Processed {min(start + batch_size, len(pending))}/{len(pending)} typed PDF(s)"
+                )
 
-    return completed
+        return completed
+    finally:
+        if temp_debug_workspace is not None:
+            temp_debug_workspace.cleanup()
 
 
 def process_typed_documents_no_csv(
@@ -489,6 +524,7 @@ def process_typed_documents_no_csv(
     input_path: Path,
     debug_path: Path,
     config_path: Path,
+    retain_debug_artifacts: bool | None = None,
 ) -> list[TypedDocumentResult]:
     """Like process_typed_input, but skips TypedCsvStore entirely -- for a
     caller (batch_runner) that persists results some other way (a Postgres
@@ -504,6 +540,7 @@ def process_typed_documents_no_csv(
         debug_path=debug_path,
         config_path=config_path,
         on_results=lambda _results: None,
+        retain_debug_artifacts=retain_debug_artifacts,
     )
 
 
@@ -516,6 +553,7 @@ def process_typed_input(
     reset_output: bool = False,
     skip_existing: bool = False,
     progress_callback: ProgressCallback | None = None,
+    retain_debug_artifacts: bool | None = None,
 ) -> TypedBatchResult:
     pdfs = discover_typed_pdfs(input_path)
     store = TypedCsvStore.load(
@@ -537,6 +575,7 @@ def process_typed_input(
         config_path=config_path,
         on_results=_persist,
         progress_callback=progress_callback,
+        retain_debug_artifacts=retain_debug_artifacts,
     )
 
     ordered = tuple(sorted(completed, key=lambda result: result.source_file.casefold()))

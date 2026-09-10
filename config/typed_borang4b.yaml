@@ -27,3 +27,6 @@ typed:
     max_age: 120
     require_all_strict_fields: true
 
+debug:
+  retain_artifacts: false
+
