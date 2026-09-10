@@ -169,6 +169,12 @@ def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]
     is_zip = filename.lower().endswith(".zip") or "zip" in content_type
 
     if is_zip:
+        # The zip itself always has to be downloaded in full -- OneDrive's
+        # "download folder as zip" endpoint doesn't support resuming a
+        # partial transfer -- but a caller retrying a previously-interrupted
+        # attempt (marriage-be reuses the same `dest_dir` across a submission
+        # retry; see onedrive/service.py::run_onedrive_fetch) can still skip
+        # re-extracting whatever files a prior attempt already wrote out.
         buffer = BytesIO()
         for chunk in response.iter_content(chunk_size=1024 * 1024):
             buffer.write(chunk)
@@ -179,9 +185,18 @@ def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]
                 if info.is_dir():
                     continue
                 target = dest_dir / info.filename
+                if target.exists() and target.stat().st_size == info.file_size:
+                    extracted.append(target)
+                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(info) as source, open(target, "wb") as handle:
+                # Extract to a sibling temp path and rename into place only
+                # once fully written, so a crash mid-extraction never leaves
+                # a truncated file that the size check above would mistake
+                # for a completed one on the next retry.
+                tmp_target = target.with_name(target.name + ".part")
+                with archive.open(info) as source, open(tmp_target, "wb") as handle:
                     handle.write(source.read())
+                tmp_target.replace(target)
                 extracted.append(target)
         return extracted
 
@@ -299,6 +314,14 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
     same-named local sub-directory, so a share with categories/districts/
     years nested above the actual files gets fully walked, not just its
     top level.
+
+    Resumable across retries: a file already present at its target path
+    under `dest_dir` (from a prior call that got interrupted -- e.g. a
+    timeout partway through a folder with thousands of items) is skipped
+    rather than re-downloaded, since marriage-be reuses the same
+    destination directory when retrying a failed OneDrive submission (see
+    onedrive/service.py::run_onedrive_fetch, which only deletes it on
+    success).
     """
     if _depth > _MAX_BROWSER_FOLDER_DEPTH:
         LOGGER.warning(
@@ -344,6 +367,18 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
                 page.wait_for_timeout(1000)
                 continue
 
+            target = dest_dir / name
+            if target.exists() and target.stat().st_size > 0:
+                # Resuming a previously-interrupted pull of this same folder
+                # (marriage-be reuses the same destination dir across a
+                # submission retry; see onedrive/service.py::
+                # run_onedrive_fetch) -- this file was already downloaded,
+                # so skip re-triggering the browser download for it. Safe
+                # because a file only ever exists at `target` once fully
+                # written (see the temp-path rename below), never mid-write.
+                downloaded.append(target)
+                continue
+
             more_button = row.get_by_label("Show more actions for this item")
             if more_button.count() == 0:
                 continue
@@ -357,8 +392,13 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
                 menu_item.first.click(timeout=10_000)
             download = dl_info.value
             dest_dir.mkdir(parents=True, exist_ok=True)
-            target = dest_dir / download.suggested_filename
-            download.save_as(target)
+            # Named after the row's own display name (known upfront, and
+            # what the exists-check above keys on) rather than
+            # `download.suggested_filename` -- keeps the pre-download skip
+            # check and the actual write pointed at the exact same path.
+            tmp_target = dest_dir / f"{name}.part"
+            download.save_as(tmp_target)
+            tmp_target.replace(target)
             downloaded.append(target)
         except Exception:
             # One stuck/overlay-covered row shouldn't sacrifice every other

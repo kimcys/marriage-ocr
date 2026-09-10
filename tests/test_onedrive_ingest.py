@@ -131,6 +131,43 @@ def test_download_anonymous_share_extracts_zip_folder(monkeypatch, tmp_path: Pat
     assert (tmp_path / "sub" / "page2.jpg").read_bytes() == b"jpg-bytes-2"
 
 
+def test_download_anonymous_share_zip_skips_already_extracted_files(monkeypatch, tmp_path: Path):
+    """Simulates retrying a submission whose destination dir already has a
+    file from a prior (interrupted) attempt -- marriage-be reuses the same
+    dest_dir across a retry (see onedrive/service.py::run_onedrive_fetch),
+    so re-extracting a file that's already there byte-for-byte correct is
+    wasted work, and re-writing it is exactly what a truncated-on-crash file
+    would need to avoid becoming permanently mistaken for "done"."""
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("page1.jpg", b"jpg-bytes")
+        archive.writestr("page2.jpg", b"jpg-bytes-2")
+    zip_bytes = buffer.getvalue()
+
+    # page1.jpg already exists locally, correct size -- must be left alone.
+    (tmp_path / "page1.jpg").write_bytes(b"jpg-bytes")
+    already_extracted_mtime = (tmp_path / "page1.jpg").stat().st_mtime_ns
+
+    resolve_response = _FakeResponse("https://contoso-my.sharepoint.com/:f:/g/personal/x/AbCdEf?e=1")
+    download_response = _FakeResponse(
+        "https://contoso-my.sharepoint.com/:f:/g/personal/x/AbCdEf?e=1&download=1",
+        headers={
+            "Content-Disposition": 'attachment; filename="folder.zip"',
+            "Content-Type": "application/zip",
+        },
+        content=zip_bytes,
+    )
+    calls = iter([resolve_response, download_response])
+    monkeypatch.setattr(onedrive_ingest.requests, "get", lambda *a, **kw: next(calls))
+
+    downloaded = download_anonymous_share("https://1drv.ms/f/s!AbCdEf", tmp_path)
+
+    assert sorted(p.name for p in downloaded) == ["page1.jpg", "page2.jpg"]
+    assert (tmp_path / "page1.jpg").stat().st_mtime_ns == already_extracted_mtime
+    assert (tmp_path / "page2.jpg").read_bytes() == b"jpg-bytes-2"
+    assert not (tmp_path / "page2.jpg.part").exists()
+
+
 def test_download_anonymous_share_raises_when_link_requires_signin(monkeypatch, tmp_path: Path):
     resolve_response = _FakeResponse("https://contoso-my.sharepoint.com/:b:/g/personal/x/AbCdEf?e=1")
     signin_response = _FakeResponse(
@@ -255,6 +292,7 @@ class _FakeMoreButton:
         self._node = node
 
     def click(self, timeout=None):
+        self._page.download_attempts.append(self._node.name)
         self._page._menu_target = self._node
 
 
@@ -364,6 +402,7 @@ class _FakeNestedFolderPage:
         self.keyboard = _FakeKeyboard()
         self._menu_target = None
         self._pending_download = None
+        self.download_attempts: list[str] = []
 
     def _current_node(self):
         node = self._tree
@@ -444,6 +483,59 @@ def test_download_all_rows_via_browser_handles_multiple_nesting_levels(tmp_path:
     assert [p.relative_to(tmp_path).as_posix() for p in downloaded] == [
         "1990 NIKAH/Daerah Petaling Jaya/scan1.pdf",
     ]
+
+
+def test_download_all_rows_via_browser_skips_files_already_on_disk(tmp_path: Path):
+    """Simulates retrying a submission after a partial/interrupted pull --
+    marriage-be reuses the same destination directory across a retry (see
+    onedrive/service.py::run_onedrive_fetch, which only deletes it on
+    success), so a file already downloaded from the prior attempt must not
+    be re-fetched, while a still-missing sibling still gets downloaded."""
+    tree = _Node(
+        "root",
+        True,
+        [
+            _Node("already_downloaded.pdf", False),
+            _Node("still_missing.pdf", False),
+        ],
+    )
+    page = _FakeNestedFolderPage(tree)
+    (tmp_path / "already_downloaded.pdf").write_bytes(b"previously-downloaded-bytes")
+
+    downloaded = onedrive_ingest._download_all_rows_via_browser(page, tmp_path)
+
+    assert sorted(p.name for p in downloaded) == ["already_downloaded.pdf", "still_missing.pdf"]
+    # The "..." menu (the first UI action taken to download a file) was
+    # never opened for the file that already existed -- only for the one
+    # actually missing.
+    assert page.download_attempts == ["still_missing.pdf"]
+    assert (tmp_path / "already_downloaded.pdf").read_bytes() == b"previously-downloaded-bytes"
+    assert (tmp_path / "still_missing.pdf").read_bytes() == b"fake-bytes"
+    assert not (tmp_path / "still_missing.pdf.part").exists()
+
+
+def test_download_all_rows_via_browser_recursion_also_resumes_nested_folders(tmp_path: Path):
+    """The resume behavior applies at every nesting level, not just the top
+    of a share -- a file several folders deep that already exists locally
+    is skipped too."""
+    tree = _Node(
+        "root",
+        True,
+        [_Node("1990 NIKAH", True, [_Node("already.pdf", False), _Node("missing.pdf", False)])],
+    )
+    page = _FakeNestedFolderPage(tree)
+    nested_dir = tmp_path / "1990 NIKAH"
+    nested_dir.mkdir()
+    (nested_dir / "already.pdf").write_bytes(b"old-bytes")
+
+    downloaded = onedrive_ingest._download_all_rows_via_browser(page, tmp_path)
+
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in downloaded) == [
+        "1990 NIKAH/already.pdf",
+        "1990 NIKAH/missing.pdf",
+    ]
+    assert page.download_attempts == ["missing.pdf"]
+    assert (nested_dir / "already.pdf").read_bytes() == b"old-bytes"
 
 
 def test_row_is_folder_detects_folder_icon_by_aria_label_substring():
