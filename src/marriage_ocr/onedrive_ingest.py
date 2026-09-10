@@ -379,7 +379,7 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
                 downloaded.append(target)
                 continue
 
-            more_button = row.get_by_label("Show more actions for this item")
+            more_button = row.get_by_label("More Actions", exact=True)
             if more_button.count() == 0:
                 continue
             more_button.first.click(timeout=10_000)

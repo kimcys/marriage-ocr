@@ -357,8 +357,8 @@ class _FakeRow:
     def dblclick(self, timeout=None):
         self._page.path = [*self._page.path, self.node.name]
 
-    def get_by_label(self, label):
-        assert label == "Show more actions for this item"
+    def get_by_label(self, label, exact=False):
+        assert label == "More Actions"
         return _FakeLocatorList([_FakeMoreButton(self._page, self.node)])
 
 
