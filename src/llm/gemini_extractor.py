@@ -22,6 +22,36 @@ LOGGER = logging.getLogger(__name__)
 
 TRANSIENT_GEMINI_HTTP_CODES = frozenset({429, 500, 502, 503, 504})
 
+# These fields are absent from most Nikah ledger layouts -- only some rows/eras
+# show them at all. Only fill one in when the image genuinely shows a value;
+# leave it null otherwise, same as every other field (do not infer or guess).
+_OPTIONAL_NIKAH_FIELD_NOTES = """
+- bangsa_suami / bangsa_isteri: each spouse's race, e.g. MELAYU, if shown.
+- warganegara_suami / warganegara_isteri: each spouse's nationality, e.g. MALAYSIA, if shown.
+- alamat_suami / alamat_isteri: each spouse's own address, only if the ledger
+  shows it separately from alamat_pendaftar (the registrar's address).
+- hari_nikah: the day of the week the akad nikah took place, if written.
+- masa_nikah: the time of day of the akad nikah, if written.
+- tempat_nikah: the venue/place name of the akad nikah -- distinct from
+  tempat_nikah_daerah/tempat_nikah_negeri below, which are the administrative
+  district/state rather than the venue itself.
+- tempat_nikah_daerah / tempat_nikah_negeri: the district and state where the
+  nikah was registered, if shown.
+- pernikahan_kali: which marriage this is for the husband (e.g. PERTAMA,
+  KEDUA), if the ledger states it.
+- isteri_ke: which wife number this is for the husband (e.g. PERTAMA, KEDUA),
+  if the ledger states it.
+- belanja_hantaran: the hantaran/gift-in-kind expense, distinct from
+  mas_kahwin (the mas kahwin/dowry amount).
+- pemberian_lain: any other gift mentioned besides mas_kahwin and hantaran.
+- ic_wali: the guardian's own IC/passport number, if shown.
+- umur_wali: the guardian's age in years, if shown.
+- alamat_wali: the guardian's own address, if shown separately from the
+  couple's or registrar's address.
+- ic_saksi_1 / ic_saksi_2: each witness's own IC/passport number, if shown
+  next to their name.
+""".strip()
+
 
 @dataclass(frozen=True)
 class GeminiRecordResult:
@@ -196,7 +226,7 @@ Google Vision OCR cell hints:
         """
         prompt_mode = str(self.config.get("prompt_mode", "")).strip().lower()
         if prompt_mode == "handwritten_aggressive":
-            return """
+            return f"""
 You are extracting ONE handwritten row from a Malay Islamic marriage register,
 Daftar Perkahwinan Orang Islam.
 
@@ -223,11 +253,12 @@ Rules:
 - hubungan_wali should be a relationship such as BAPA, ABANG, ADIK-BERADIK, WALI HAKIM, etc.
 - saksi_1 and saksi_2 are the two marriage witnesses when visible.
 - Use the strongest plausible spelling for addresses, remarks, and other free-text columns instead of leaving OCR noise unchanged.
+{_OPTIONAL_NIKAH_FIELD_NOTES}
         - Return field_confidence as an array of objects with `field` and `confidence`.
         - Put fields below 0.70 confidence into uncertain_fields.
 """.strip()
 
-        return """
+        return f"""
 You are extracting ONE handwritten row from a Malay Islamic marriage register,
 Daftar Perkahwinan Orang Islam.
 
@@ -250,6 +281,7 @@ Rules:
 - mas_kahwin should usually contain RM and a numeric amount when visible.
 - hubungan_wali should be a relationship such as BAPA, ABANG, ADIK-BERADIK, WALI HAKIM, etc.
 - saksi_1 and saksi_2 are the two marriage witnesses when visible.
+{_OPTIONAL_NIKAH_FIELD_NOTES}
         - Return field_confidence as an array of objects with `field` and `confidence`.
         - Put fields below 0.70 confidence into uncertain_fields.
 """.strip()
@@ -296,6 +328,26 @@ Rules:
             tarikh_keluar=_clean_str(payload.get("tarikh_keluar")),
             tarikh_keluar_raw=_clean_str(payload.get("tarikh_keluar_raw")),
             remarks=_clean_str(payload.get("remarks")),
+            bangsa_suami=_clean_str(payload.get("bangsa_suami")),
+            warganegara_suami=_clean_str(payload.get("warganegara_suami")),
+            alamat_suami=_clean_str(payload.get("alamat_suami")),
+            bangsa_isteri=_clean_str(payload.get("bangsa_isteri")),
+            warganegara_isteri=_clean_str(payload.get("warganegara_isteri")),
+            alamat_isteri=_clean_str(payload.get("alamat_isteri")),
+            hari_nikah=_clean_str(payload.get("hari_nikah")),
+            masa_nikah=_clean_str(payload.get("masa_nikah")),
+            tempat_nikah=_clean_str(payload.get("tempat_nikah")),
+            tempat_nikah_daerah=_clean_str(payload.get("tempat_nikah_daerah")),
+            tempat_nikah_negeri=_clean_str(payload.get("tempat_nikah_negeri")),
+            pernikahan_kali=_clean_str(payload.get("pernikahan_kali")),
+            isteri_ke=_clean_str(payload.get("isteri_ke")),
+            belanja_hantaran=_clean_str(payload.get("belanja_hantaran")),
+            pemberian_lain=_clean_str(payload.get("pemberian_lain")),
+            ic_wali=_clean_str(payload.get("ic_wali")),
+            umur_wali=_clean_int(payload.get("umur_wali")),
+            alamat_wali=_clean_str(payload.get("alamat_wali")),
+            ic_saksi_1=_clean_str(payload.get("ic_saksi_1")),
+            ic_saksi_2=_clean_str(payload.get("ic_saksi_2")),
         )
 
         field_confidence = _normalize_field_confidence(payload.get("field_confidence"))
@@ -383,6 +435,28 @@ GEMINI_RECORD_SCHEMA: dict[str, Any] = {
         "tarikh_keluar": {"type": "STRING", "nullable": True},
         "tarikh_keluar_raw": {"type": "STRING", "nullable": True},
         "remarks": {"type": "STRING", "nullable": True},
+        # Optional extras -- not present on every ledger layout, see
+        # _nikah_instructions for guidance on when to leave these null.
+        "bangsa_suami": {"type": "STRING", "nullable": True},
+        "warganegara_suami": {"type": "STRING", "nullable": True},
+        "alamat_suami": {"type": "STRING", "nullable": True},
+        "bangsa_isteri": {"type": "STRING", "nullable": True},
+        "warganegara_isteri": {"type": "STRING", "nullable": True},
+        "alamat_isteri": {"type": "STRING", "nullable": True},
+        "hari_nikah": {"type": "STRING", "nullable": True},
+        "masa_nikah": {"type": "STRING", "nullable": True},
+        "tempat_nikah": {"type": "STRING", "nullable": True},
+        "tempat_nikah_daerah": {"type": "STRING", "nullable": True},
+        "tempat_nikah_negeri": {"type": "STRING", "nullable": True},
+        "pernikahan_kali": {"type": "STRING", "nullable": True},
+        "isteri_ke": {"type": "STRING", "nullable": True},
+        "belanja_hantaran": {"type": "STRING", "nullable": True},
+        "pemberian_lain": {"type": "STRING", "nullable": True},
+        "ic_wali": {"type": "STRING", "nullable": True},
+        "umur_wali": {"type": "INTEGER", "nullable": True},
+        "alamat_wali": {"type": "STRING", "nullable": True},
+        "ic_saksi_1": {"type": "STRING", "nullable": True},
+        "ic_saksi_2": {"type": "STRING", "nullable": True},
         "field_confidence": {
             "type": "ARRAY",
             "items": {
@@ -411,7 +485,13 @@ GEMINI_RECORD_SCHEMA: dict[str, Any] = {
         "nama_isteri", "ic_lama_isteri", "ic_baru_isteri", "id_isteri_raw", "umur_isteri",
         "mas_kahwin", "mas_kahwin_raw", "nama_pendaftar", "alamat_pendaftar", "nama_wali",
         "hubungan_wali", "saksi_1", "saksi_2", "tarikh_nikah", "tarikh_nikah_raw",
-        "tarikh_keluar", "tarikh_keluar_raw", "remarks", "field_confidence", "uncertain_fields", "notes",
+        "tarikh_keluar", "tarikh_keluar_raw", "remarks",
+        "bangsa_suami", "warganegara_suami", "alamat_suami",
+        "bangsa_isteri", "warganegara_isteri", "alamat_isteri",
+        "hari_nikah", "masa_nikah", "tempat_nikah", "tempat_nikah_daerah", "tempat_nikah_negeri",
+        "pernikahan_kali", "isteri_ke", "belanja_hantaran", "pemberian_lain",
+        "ic_wali", "umur_wali", "alamat_wali", "ic_saksi_1", "ic_saksi_2",
+        "field_confidence", "uncertain_fields", "notes",
     ],
 }
 

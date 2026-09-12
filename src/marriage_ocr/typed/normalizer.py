@@ -33,6 +33,12 @@ _TRAILING_NOISE_PATTERN = re.compile(
     r"\b(?:NO\.?\s*SIRI|NO\.?\s*SIN|UMUR|BANGSA|WARGANEGARA|ALAMAT|PENDAFTAR|HUBUNGAN|SAKSI\s+PERTAMA|SAKSI\s+KEDUA)\b.*$",
     re.IGNORECASE,
 )
+# Vision occasionally reads a printed tick mark or a dotted fill-in-the-blank
+# line (both purely visual, not text) as trailing characters -- a lone
+# checkmark/cross is never legitimate content, and a *run* of 2+ dots/dashes
+# is a form's underline rather than punctuation (unlike a single trailing
+# abbreviation dot, e.g. "P.P.T.", which this leaves alone).
+_TRAILING_SYMBOL_NOISE = re.compile(r"(?:[✓✗]+|[.\-–—_]{2,})\s*$")
 _LOCATION_NOISE = (
     "DAERAH",
     "SELANGOR",
@@ -200,7 +206,8 @@ def _strip_label(value: str, field_key: str) -> str:
 
 
 def _strip_trailing_noise(value: str) -> str:
-    return _TRAILING_NOISE_PATTERN.sub("", value).strip()
+    value = _TRAILING_NOISE_PATTERN.sub("", value).strip()
+    return _TRAILING_SYMBOL_NOISE.sub("", value).strip()
 
 
 def _score_line_for_field(line: str, field_key: str | None) -> tuple[int, int, int]:

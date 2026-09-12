@@ -204,10 +204,13 @@ Field-specific notes:
   capture it if present even on a legacy page.
 - tarikh_daftar: the registration date, stacked under bil (distinct from
   tarikh_cerai, the actual divorce date, which has its own column).
-- nama_suami / ic_suami: husband's name and single IC/passport number (this
-  corpus wants one IC field per person here, unlike Nikah's split
-  ic_lama/ic_baru). ic_suami_raw holds anything illegible.
-- nama_isteri / ic_isteri: same, for the wife.
+- nama_suami / umur_suami / ic_suami: husband's name, age in years (seen
+  written in parentheses next to the IC on legacy-layout rows, e.g.
+  "840423-08-5547 (25thn)" -- the modern layout genuinely omits it, so leave
+  null there), and single IC/passport number (this corpus wants one IC field
+  per person here, unlike Nikah's split ic_lama/ic_baru). ic_suami_raw holds
+  anything illegible.
+- nama_isteri / umur_isteri / ic_isteri: same, for the wife.
 - tempat_cerai: place/authority of the divorce, legacy layout only, e.g.
   "TANPA KEBENARAN MAHKAMAH", "KEBENARAN MAHKAMAH".
 - nama_pendaftar: registrar's name, legacy layout only.
@@ -229,6 +232,18 @@ Field-specific notes:
 - hal_hal_lain: legacy layout's dedicated remarks column, e.g. "Diambil
   oleh isteri", or any modern-layout Tandatangan-column phone numbers/names
   per the shared rules above.
+
+Optional extras -- not present on every row/era, only fill in when the image
+genuinely shows a value; leave null otherwise:
+- no_telefon: a phone number, if one is written down (these show up in the
+  Hal-Hal Lain/Catatan free text on real samples) -- capture it here too as
+  its own field in addition to leaving it in hal_hal_lain/catatan_raw.
+- bangsa_suami / bangsa_isteri: race, e.g. MELAYU, if shown.
+- warganegara_suami / warganegara_isteri: nationality, e.g. MALAYSIA, if shown.
+- alamat_suami / alamat_isteri: each spouse's own home address, if shown --
+  distinct from tempat_cerai (the court/no-court status).
+- tempat_nikah_daerah / tempat_nikah_negeri: district and state where the
+  divorce was registered, if shown.
 """.strip()
 
 CERAI_PROPERTIES: dict[str, Any] = {
@@ -237,9 +252,11 @@ CERAI_PROPERTIES: dict[str, Any] = {
     "no_siri": {"type": "STRING", "nullable": True},
     "tarikh_daftar": {"type": "STRING", "nullable": True},
     "nama_suami": {"type": "STRING", "nullable": True},
+    "umur_suami": {"type": "INTEGER", "nullable": True},
     "ic_suami": {"type": "STRING", "nullable": True},
     "ic_suami_raw": {"type": "STRING", "nullable": True},
     "nama_isteri": {"type": "STRING", "nullable": True},
+    "umur_isteri": {"type": "INTEGER", "nullable": True},
     "ic_isteri": {"type": "STRING", "nullable": True},
     "ic_isteri_raw": {"type": "STRING", "nullable": True},
     "tempat_cerai": {"type": "STRING", "nullable": True},
@@ -254,6 +271,15 @@ CERAI_PROPERTIES: dict[str, Any] = {
     "bil_daftar_rujukan": {"type": "STRING", "nullable": True},
     "catatan_raw": {"type": "STRING", "nullable": True},
     "hal_hal_lain": {"type": "STRING", "nullable": True},
+    "no_telefon": {"type": "STRING", "nullable": True},
+    "bangsa_suami": {"type": "STRING", "nullable": True},
+    "warganegara_suami": {"type": "STRING", "nullable": True},
+    "alamat_suami": {"type": "STRING", "nullable": True},
+    "bangsa_isteri": {"type": "STRING", "nullable": True},
+    "warganegara_isteri": {"type": "STRING", "nullable": True},
+    "alamat_isteri": {"type": "STRING", "nullable": True},
+    "tempat_nikah_daerah": {"type": "STRING", "nullable": True},
+    "tempat_nikah_negeri": {"type": "STRING", "nullable": True},
 }
 
 
@@ -298,6 +324,19 @@ Field-specific notes:
   If you encounter Jawi script in a filled-in data field itself (not just
   the printed header), set that field to null and add a note explaining
   what you saw -- do not attempt to transliterate.
+
+Optional extras -- not present on every row/era, only fill in when the image
+genuinely shows a value; leave null otherwise:
+- no_telefon: a phone number, if one is written down (these show up in the
+  Hal-Hal Lain/Catatan free text on real samples) -- capture it here too as
+  its own field in addition to leaving it in hal_hal_lain/catatan_raw.
+- bangsa_suami / bangsa_isteri: race, e.g. MELAYU, if shown.
+- warganegara_suami / warganegara_isteri: nationality, e.g. MALAYSIA, if shown.
+- alamat_suami / alamat_isteri: each spouse's own home address, if shown --
+  distinct from tempat_rujuk (the office/place the reconciliation was
+  registered at).
+- tempat_nikah_daerah / tempat_nikah_negeri: district and state where the
+  reconciliation was registered, if shown.
 """.strip()
 
 RUJUK_PROPERTIES: dict[str, Any] = {
@@ -325,6 +364,15 @@ RUJUK_PROPERTIES: dict[str, Any] = {
     "tarikh_keluar_raw": {"type": "STRING", "nullable": True},
     "catatan_raw": {"type": "STRING", "nullable": True},
     "hal_hal_lain": {"type": "STRING", "nullable": True},
+    "no_telefon": {"type": "STRING", "nullable": True},
+    "bangsa_suami": {"type": "STRING", "nullable": True},
+    "warganegara_suami": {"type": "STRING", "nullable": True},
+    "alamat_suami": {"type": "STRING", "nullable": True},
+    "bangsa_isteri": {"type": "STRING", "nullable": True},
+    "warganegara_isteri": {"type": "STRING", "nullable": True},
+    "alamat_isteri": {"type": "STRING", "nullable": True},
+    "tempat_nikah_daerah": {"type": "STRING", "nullable": True},
+    "tempat_nikah_negeri": {"type": "STRING", "nullable": True},
 }
 
 

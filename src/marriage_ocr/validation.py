@@ -309,6 +309,16 @@ def _score_cerai(
     confidence, ic_critical = _score_spouse_pair_ic(validated, reasons, missing_fields, confidence)
     critical = critical or ic_critical
 
+    # Ages are only present on the legacy layout (written in parentheses next
+    # to the IC, e.g. "840423-08-5547 (25thn)") -- soft check only, not
+    # critical, since the modern layout legitimately omits them.
+    if validated.umur_suami is not None and not _age_valid(validated.umur_suami, validation_config):
+        confidence -= 0.10
+        reasons.append("invalid husband age")
+    if validated.umur_isteri is not None and not _age_valid(validated.umur_isteri, validation_config):
+        confidence -= 0.10
+        reasons.append("invalid wife age")
+
     if bool(validation_config.get("require_tarikh_cerai", True)) and not is_valid_date(validated.tarikh_cerai):
         confidence -= 0.10
         reasons.append("invalid or missing cerai date")

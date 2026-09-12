@@ -211,6 +211,58 @@ def test_validate_record_cerai_requires_tarikh_cerai() -> None:
     assert "Tarikh Cerai" in validated.missing_fields
 
 
+def test_validate_record_cerai_ok_without_ages_present() -> None:
+    # Ages are only on the legacy layout -- the modern layout genuinely
+    # omits them and must not be penalized for that.
+    record = ExtractedRecord(
+        record_type="CERAI",
+        bil="1/97",
+        nama_suami="ABDULLAH B. ABD HAMID",
+        ic_suami="A0394566",
+        nama_isteri="ZUBAIDAH BTE YAHYA",
+        ic_isteri="A0287541",
+        tarikh_cerai="1997-01-21",
+        umur_suami=None,
+        umur_isteri=None,
+    )
+
+    validated = validate_record(
+        record,
+        CERAI_CELL_RESULTS,
+        VALIDATION_CONFIG,
+        layout_confidence=1.0,
+        record_type="cerai",
+    )
+
+    assert validated.status_review == "OK"
+    assert validated.record_type == "CERAI"
+
+
+def test_validate_record_cerai_flags_implausible_age_when_present() -> None:
+    record = ExtractedRecord(
+        record_type="CERAI",
+        bil="1/97",
+        nama_suami="ABDULLAH B. ABD HAMID",
+        ic_suami="A0394566",
+        nama_isteri="ZUBAIDAH BTE YAHYA",
+        ic_isteri="A0287541",
+        tarikh_cerai="1997-01-21",
+        umur_suami=5,
+    )
+
+    validated = validate_record(
+        record,
+        CERAI_CELL_RESULTS,
+        VALIDATION_CONFIG,
+        layout_confidence=1.0,
+        record_type="cerai",
+    )
+
+    assert "invalid husband age" in validated.review_reason
+    # Present-but-implausible, not absent -- umur_suami=5 has a value.
+    assert "Umur Suami" not in validated.missing_fields
+
+
 def test_validate_record_rujuk_ok_without_ages_present() -> None:
     # Ages are only on the legacy layout -- the modern layout genuinely
     # omits them and must not be penalized for that.

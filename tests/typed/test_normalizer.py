@@ -8,6 +8,7 @@ from marriage_ocr.typed.normalizer import (
     normalize_date_preserving_style,
     normalize_ic,
     normalize_mas_kahwin,
+    normalize_plain_text,
 )
 
 
@@ -78,6 +79,26 @@ def test_build_extracted_record_maps_typed_fields() -> None:
     assert record.ic_baru_suami == "571018105919"
     assert record.ic_lama_suami is None
     assert record.umur_suami == 52
+
+
+def test_normalize_plain_text_strips_trailing_checkmark() -> None:
+    # Regression: a printed tick mark on the form was being read by Vision
+    # as a trailing "✓" character with no cleanup anywhere to remove it.
+    assert normalize_plain_text("ABANG KANDUNG ✓", field_key="hubungan_wali") == "ABANG KANDUNG"
+
+
+def test_normalize_plain_text_strips_trailing_dot_leader() -> None:
+    # Regression: a dotted fill-in-the-blank line on the form was being
+    # read as a run of trailing periods.
+    assert normalize_plain_text("BAPA KANDUNG ..............", field_key="hubungan_wali") == "BAPA KANDUNG"
+
+
+def test_normalize_plain_text_keeps_a_single_trailing_abbreviation_dot() -> None:
+    # A lone trailing dot is real punctuation (an abbreviation), not a
+    # form's dotted underline -- only *runs* of 2+ get stripped.
+    assert normalize_plain_text("TUAN HAJI IDRIS BIN HAJI RAMLI , P.P.T.", field_key="nama_wali") == (
+        "TUAN HAJI IDRIS BIN HAJI RAMLI , P.P.T."
+    )
 
 
 def test_normalize_name_strips_following_noise_lines() -> None:

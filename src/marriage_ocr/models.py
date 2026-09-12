@@ -70,6 +70,25 @@ class ExtractedRecord:
 
     remarks: str | None = None
 
+    # Optional Nikah extras -- not present on every ledger layout, only
+    # filled in when the image genuinely shows a value (see gemini_extractor.py's
+    # _nikah_instructions). bangsa_suami/warganegara_suami/alamat_suami,
+    # bangsa_isteri/warganegara_isteri/alamat_isteri, tempat_nikah_daerah, and
+    # tempat_nikah_negeri are declared further below (shared with typed
+    # Cerai/Rujuk) and reused here rather than duplicated.
+    hari_nikah: str | None = None
+    masa_nikah: str | None = None
+    tempat_nikah: str | None = None
+    pernikahan_kali: str | None = None
+    isteri_ke: str | None = None
+    belanja_hantaran: str | None = None
+    pemberian_lain: str | None = None
+    ic_wali: str | None = None
+    umur_wali: int | None = None
+    alamat_wali: str | None = None
+    ic_saksi_1: str | None = None
+    ic_saksi_2: str | None = None
+
     # Shared across Cerai/Rujuk (and, for no_rujukan/no_siri/tarikh_daftar,
     # potentially Nikah too) -- see src/llm/record_schemas.py for the real
     # sample images these are grounded in.
@@ -106,10 +125,18 @@ class ExtractedRecord:
     catatan_raw: str | None = None
     hal_hal_lain: str | None = None
 
+    # Optional Cerai/Rujuk extra -- phone numbers turn up repeatedly in the
+    # free-text hal_hal_lain/catatan_raw column on real samples; this pulls
+    # one out as its own field when the registrar/witness wrote one down,
+    # instead of leaving it buried in free text.
+    no_telefon: str | None = None
+
     # Typed Cerai (Borang 8/9/10) and Rujuk (Borang 5/7B/8B) certificates
     # carry richer per-spouse personal details than any handwritten ledger
     # does -- see src/marriage_ocr/typed/template.py for the real samples
-    # these are grounded in. Shared by both typed record types.
+    # these are grounded in. Shared by both typed record types, and now also
+    # reused by the handwritten Nikah path (gemini_extractor.py) for the
+    # optional bangsa/warganegara/alamat fields requested for Nikah records.
     bangsa_suami: str | None = None
     bangsa_isteri: str | None = None
     tarikh_lahir_suami: str | None = None
@@ -138,7 +165,10 @@ class ExtractedRecord:
     tarikh_cerai_hijri: str | None = None
     tarikh_daftar_hijri: str | None = None
 
-    # Typed Cerai-specific.
+    # Typed Cerai-specific. tempat_nikah_daerah/tempat_nikah_negeri are also
+    # reused by the handwritten Nikah path for its own optional "Daerah"/
+    # "Negeri" columns -- same real-world concept (district/state where the
+    # nikah took place), just populated from two different pipelines.
     bilangan_kes_mal: str | None = None
     tempat_nikah_daerah: str | None = None
     tempat_nikah_negeri: str | None = None

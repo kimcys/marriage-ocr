@@ -75,7 +75,34 @@ _STRICT_OUTPUT_FIELDS_RUJUK = {
     "tarikh_rujuk": "Tarikh Rujuk",
 }
 
-_CONTAMINATION_LABELS = ("WARGANEGARA", "BANGSA", "ALAMAT", "SAKSI KEDUA", "BELANJA HANTARAN")
+_CONTAMINATION_LABELS = (
+    "WARGANEGARA",
+    "BANGSA",
+    "ALAMAT",
+    "SAKSI KEDUA",
+    "BELANJA HANTARAN",
+    # tarikh_nikah's own row text ("Hijrah ... Hari ... Masa ...") bleeding
+    # down into alamat_pendaftar/nama_pendaftar when a page's alignment
+    # drifts -- these three regions sit with near-zero vertical margin in
+    # BORANG_4B_REGIONS (typed/template.py) and are the furthest fields
+    # from that section's alignment anchor, so this is the most common
+    # real-batch failure mode for those two fields. "TEMPAT" is
+    # deliberately not in this list -- that's alamat_pendaftar's own
+    # correct printed label, not contamination.
+    "NIKAH",
+    "HIJRAH",
+    "MASA",
+    "HARI",
+)
+
+
+def _has_contamination(check_text: str) -> list[str]:
+    # Word-boundary matched, not a plain substring -- "HARI" alone would
+    # otherwise false-positive on real Malay names that merely contain it
+    # as a substring (Zahari, Bahari, ...), rejecting genuinely correct
+    # extractions for no reason.
+    upper = check_text.upper()
+    return [label for label in _CONTAMINATION_LABELS if re.search(rf"\b{re.escape(label)}\b", upper)]
 
 
 def _text(value: object | None) -> str:
@@ -232,7 +259,7 @@ def _validate_borang_4b_record(
             issues.append(f"confidence below threshold: {confidence:.3f}")
 
         if check_text and key not in {"umur_suami", "umur_isteri", "id_suami", "id_isteri"}:
-            contamination = [label for label in _CONTAMINATION_LABELS if label in check_text.upper()]
+            contamination = _has_contamination(check_text)
             if contamination:
                 valid = False
                 issues.append(f"contamination: {', '.join(contamination)}")

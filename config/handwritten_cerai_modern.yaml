@@ -111,10 +111,20 @@ export:
     - No Siri
     - Tarikh Daftar
     - Nama Suami
+    - Umur Suami
     - IC Suami
+    - Bangsa Suami
+    - Warganegara Suami
+    - Alamat Suami
     - Nama Isteri
+    - Umur Isteri
     - IC Isteri
+    - Bangsa Isteri
+    - Warganegara Isteri
+    - Alamat Isteri
     - Tempat Cerai
+    - Daerah
+    - Negeri
     - Nama Pendaftar
     - Keadaan Talak
     - Jumlah Talak
@@ -124,6 +134,7 @@ export:
     - Tarikh Keluar
     - Catatan Raw
     - Hal Hal Lain
+    - No Telefon
     - Confidence
     - Status
 

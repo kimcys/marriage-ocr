@@ -113,10 +113,18 @@ export:
     - Nama Suami
     - Umur Suami
     - IC Suami
+    - Bangsa Suami
+    - Warganegara Suami
+    - Alamat Suami
     - Nama Isteri
     - Umur Isteri
     - IC Isteri
+    - Bangsa Isteri
+    - Warganegara Isteri
+    - Alamat Isteri
     - Tempat Rujuk
+    - Daerah
+    - Negeri
     - Nama Pendaftar
     - Bil Cerai
     - Rujuk Kali
@@ -126,6 +134,7 @@ export:
     - Tarikh Keluar
     - Catatan Raw
     - Hal Hal Lain
+    - No Telefon
     - Confidence
     - Status
 

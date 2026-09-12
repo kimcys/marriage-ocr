@@ -107,6 +107,45 @@ def test_content_index_rebuilds_from_a_reloaded_csv(tmp_path: Path) -> None:
     assert rows["scan_b.pdf"]["Duplicate Of Source File"] == "scan_a.pdf"
 
 
+def _nikah_result(source: str, ic_baru_suami: str, status: ProcessingStatus) -> TypedDocumentResult:
+    return TypedDocumentResult(
+        record=ExtractedRecord(bil="01/2009", nama_suami="A, BIN B", ic_baru_suami=ic_baru_suami),
+        source_file=source,
+        processing_status=status,
+    )
+
+
+def test_all_nikah_batch_drops_cerai_only_columns_that_stay_blank(tmp_path: Path) -> None:
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    store.upsert(_nikah_result("record.pdf", "561217085317", ProcessingStatus.SUCCESS))
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        header = next(csv.reader(handle))
+
+    assert "IC Suami" not in header
+    assert "Bangsa Suami" not in header
+    # Nikah's own fields, and run-metadata columns, are never dropped.
+    assert "IC Baru Suami" in header
+    assert "Record Type" in header
+    assert "Source File" in header
+
+
+def test_a_mixed_batch_keeps_ic_suami_once_any_row_actually_uses_it(tmp_path: Path) -> None:
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    store.upsert(_result("nikah.pdf", "01/2009", ProcessingStatus.SUCCESS))
+    store.upsert(_cerai_result("cerai.pdf", "740326145837", ProcessingStatus.SUCCESS))
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        rows = {row["Source File"]: row for row in csv.DictReader(handle)}
+
+    assert rows["cerai.pdf"]["IC Suami"] == "740326145837"
+    assert rows["nikah.pdf"]["IC Suami"] == ""
+
+
 def test_skip_existing_only_skips_success_rows(tmp_path: Path) -> None:
     output = tmp_path / "typed_records.csv"
     store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)

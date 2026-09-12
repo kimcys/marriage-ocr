@@ -6,6 +6,7 @@ import csv
 
 import pytest
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 from marriage_ocr import exporter as exporter_module
 from marriage_ocr.exporter import (
@@ -84,11 +85,12 @@ def test_exporter_can_show_public_columns_only(tmp_path: Path) -> None:
 
     assert summary.written_count == 1
     assert [worksheet.cell(row=1, column=index + 1).value for index in range(len(PUBLIC_XLSX_COLUMNS))] == PUBLIC_XLSX_COLUMNS
-    assert worksheet.column_dimensions["Y"].hidden is True
-    assert worksheet.column_dimensions["A"].hidden is False
     expected_hidden = [column for column in XLSX_COLUMNS if column not in PUBLIC_XLSX_COLUMNS]
+    first_hidden_column_letter = get_column_letter(len(PUBLIC_XLSX_COLUMNS) + 1)
+    assert worksheet.column_dimensions[first_hidden_column_letter].hidden is True
+    assert worksheet.column_dimensions["A"].hidden is False
     assert worksheet.max_column == len(PUBLIC_XLSX_COLUMNS) + len(expected_hidden)
-    assert worksheet["Y1"].value == "ID Suami Raw"
+    assert worksheet[f"{first_hidden_column_letter}1"].value == expected_hidden[0]
 
 
 def test_exporter_skips_duplicates_on_rerun(tmp_path: Path) -> None:

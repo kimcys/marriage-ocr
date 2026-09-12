@@ -1,6 +1,17 @@
 from marriage_ocr.models import ExtractedRecord
-from marriage_ocr.typed.models import ProcessingStatus
+from marriage_ocr.typed.models import ProcessingStatus, RawField, Region
 from marriage_ocr.typed.validator import status_for_result, validate_record
+
+
+def _raw_field(key: str, raw_text: str, *, confidence: float = 0.95) -> RawField:
+    return RawField(
+        key=key,
+        output_name=key,
+        page_number=2,
+        region=Region(0.0, 0.0, 1.0, 1.0),
+        raw_text=raw_text,
+        confidence=confidence,
+    )
 
 
 def _valid_record() -> ExtractedRecord:
@@ -60,6 +71,43 @@ def test_letter_prefixed_old_ic_is_accepted() -> None:
     record.ic_lama_isteri = "R/F119395"
     summary = validate_record(record, {}, word_confidence_threshold=0.75, max_retry_fields=6)
     assert "IC Isteri" not in summary.failed_fields
+
+
+def test_tarikh_nikah_bleed_into_alamat_pendaftar_is_flagged_as_contamination() -> None:
+    # Regression: tarikh_nikah/alamat_pendaftar/nama_pendaftar sit with
+    # near-zero margin in BORANG_4B_REGIONS, so per-page alignment drift
+    # sometimes captures tarikh_nikah's own row text ("Hijrah ... Hari ...
+    # Masa ...") into alamat_pendaftar instead of the real Tempat value --
+    # confirmed against real batch data. High Vision confidence alone can't
+    # catch this (the bled-in text is genuinely, clearly printed), so the
+    # contamination-label check is what has to.
+    record = _valid_record()
+    record.alamat_pendaftar = "Nikah Hijrah 03 J ' AWAL 1430 Hari SABTU Masa 5.00 PTG"
+    raw_fields = {"alamat_pendaftar": _raw_field("alamat_pendaftar", record.alamat_pendaftar)}
+    summary = validate_record(record, raw_fields, word_confidence_threshold=0.75, max_retry_fields=6)
+    assert "Alamat Pendaftar" in summary.failed_fields
+
+
+def test_contamination_check_does_not_false_positive_on_names_containing_hari() -> None:
+    # "HARI" is a real substring of common Malay names (Zahari, Bahari) --
+    # the contamination check must word-boundary match, not substring match,
+    # or it would wrongly reject genuinely correct extractions.
+    record = _valid_record()
+    record.nama_pendaftar = "USTAZ ZAHARI BIN BAHARI"
+    raw_fields = {"nama_pendaftar": _raw_field("nama_pendaftar", record.nama_pendaftar)}
+    summary = validate_record(record, raw_fields, word_confidence_threshold=0.75, max_retry_fields=6)
+    assert "Nama Pendaftar" not in summary.failed_fields
+
+
+def test_tempat_is_not_treated_as_contamination_in_alamat_pendaftar() -> None:
+    # alamat_pendaftar's region stands in for the form's "Tempat" line (there
+    # is no separate region for it) -- "TEMPAT" appearing in a correct
+    # extraction is expected, not a sign the box grabbed the wrong row.
+    record = _valid_record()
+    record.alamat_pendaftar = "Tempat: PEJABAT AGAMA ISLAM DAERAH SABAK BERNAM"
+    raw_fields = {"alamat_pendaftar": _raw_field("alamat_pendaftar", record.alamat_pendaftar)}
+    summary = validate_record(record, raw_fields, word_confidence_threshold=0.75, max_retry_fields=6)
+    assert "Alamat Pendaftar" not in summary.failed_fields
 
 
 def test_multiline_age_raw_text_does_not_trigger_false_failure() -> None:

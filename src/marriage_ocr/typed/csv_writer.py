@@ -172,6 +172,37 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
     }
 
 
+# Written for every row regardless of record type -- run metadata, not
+# OCR-extracted data, so keeping them even when blank is never clutter.
+_ALWAYS_WRITTEN_COLUMNS = {
+    "Record Type",
+    "Source File",
+    "Processing Status",
+    "Review Required",
+    "Failed Fields",
+    "Retry Count",
+    "Error Message",
+    "Duplicate Of Source File",
+}
+
+
+def _active_columns(rows: Mapping[str, Mapping[str, str]]) -> list[str]:
+    """TYPED_CSV_COLUMNS is one shared schema across Nikah/Cerai/Rujuk, so a
+    single-type batch (e.g. an all-Nikah run) would otherwise always carry
+    every Cerai/Rujuk-only column -- "IC Suami" included -- as a
+    permanently-blank column sitting next to Nikah's own IC Lama/Baru
+    Suami split. Dropping any data column that's empty across *every* row
+    currently in the file removes that clutter automatically, and stays
+    correct the moment a batch actually mixes in a Cerai/Rujuk document --
+    recomputed fresh on every flush(), never cached, so it can't go stale.
+    """
+    return [
+        column
+        for column in TYPED_CSV_COLUMNS
+        if column in _ALWAYS_WRITTEN_COLUMNS or any(row.get(column) for row in rows.values())
+    ]
+
+
 def _content_key(row: Mapping[str, str]) -> tuple[str, str, str, str] | None:
     """Content-identity key for cross-file dedup: same record_type + Bil +
     at least one IC in common as a row already in the store, but from a
@@ -246,6 +277,7 @@ class TypedCsvStore:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path: Path | None = None
         try:
+            active_columns = _active_columns(self._rows)
             with NamedTemporaryFile(
                 "w",
                 newline="",
@@ -256,7 +288,7 @@ class TypedCsvStore:
                 suffix=".tmp",
             ) as handle:
                 tmp_path = Path(handle.name)
-                writer = csv.DictWriter(handle, fieldnames=TYPED_CSV_COLUMNS, extrasaction="ignore")
+                writer = csv.DictWriter(handle, fieldnames=active_columns, extrasaction="ignore")
                 writer.writeheader()
                 for source_file in sorted(self._rows, key=str.casefold):
                     writer.writerow(self._rows[source_file])
