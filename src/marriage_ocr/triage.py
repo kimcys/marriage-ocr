@@ -7,8 +7,10 @@ doesn't scale -- this module looks at one page of a file and decides:
 
 - doc_type: "handwritten" | "typed" | "unknown"
 - record_type: "nikah" | "cerai" | "rujuk" | None
-- layout_variant: "legacy" | "modern" | None (None only for typed Nikah,
-  which has no legacy/modern split)
+- layout_variant: "legacy" | "modern" | None (None only for handwritten Nikah
+  and unrouted/unknown pages -- typed Nikah splits legacy/modern the same
+  way Cerai/Rujuk do, see NIKAH_LEGACY_REGIONS/NIKAH_MODERN_REGIONS in
+  typed/template.py)
 - is_jawi: whether the page is essentially entirely Jawi script and should
   be skipped before any Gemini call is ever made on it
 
@@ -76,11 +78,37 @@ _MODERN_LAYOUT_KEYWORDS: tuple[str, ...] = ("CATATAN",)
 
 # Confirmed against real samples for all three typed record types
 # (input/nikah - typed, input/cerai - typed, input/rujuk - typed).
+#
+# ORDER MATTERS -- do not alphabetize or otherwise reshuffle this dict.
+# Unlike the handwritten check above, this one is deliberately NOT limited to
+# a header-region prefix (a typed certificate's own title can appear several
+# lines down, after "No. Siri", "(KETUA PENDAFTAR)", enactment/subseksyen
+# lines, etc. -- there is no fixed line count that reliably covers it on
+# every real sample). That means it scans the WHOLE page text, and a real
+# Cerai certificate's own body cross-references the original marriage (and,
+# on some print runs, a prior reconciliation) via printed lines like
+# "Bilangan Daftar Surat Perakuan Nikah" / "...Surat Perakuan Rujuk" --
+# confirmed on input/cerai - typed/01740326145837082010.pdf and
+# input/cerai - typed/02321004055031082020.pdf, both real Cerai certs whose
+# own body text contains the exact substrings "SURAT PERAKUAN NIKAH" and
+# "SURAT PERAKUAN RUJUK". Checking "cerai" first means a real Cerai page
+# matches (and returns) on its own title before either cross-reference line
+# is ever evaluated. Rujuk forms only cross-reference by bare "Bil Daftar
+# Cerai"/"Bil Daftar Nikah" (no "Surat Perakuan" prefix, confirmed across all
+# 3 real Rujuk samples), so they carry no equivalent risk against the Cerai
+# or Nikah keywords below.
+#
+# Real print runs spell this both with and without the trailing K -- Borang
+# 5 (1990 legacy sample) prints "SURAT PERAKUAN RUJUK", but Borang 8B (2010
+# modern sample, input/rujuk - typed/03600124085069082010.pdf) prints "SURAT
+# PERAKUAN RUJU'" (apostrophe, no K). Matching on the shared "RUJU" stem
+# (short enough to still require the full "SURAT PERAKUAN" phrase before it,
+# so it can't bare-word-match something unrelated) covers both.
 _TYPED_HEADER_KEYWORDS: dict[str, str] = {
+    "SURAT PERAKUAN CERAI": "cerai",
+    "SURAT PERAKUAN RUJU": "rujuk",
     "SURAT PERAKUAN NIKAH": "nikah",
     "BORANG 4B": "nikah",
-    "SURAT PERAKUAN CERAI": "cerai",
-    "SURAT PERAKUAN RUJUK": "rujuk",
 }
 
 # Typed Cerai/Rujuk certificates print their governing enactment in the
@@ -155,7 +183,7 @@ def _classify_headers(text: str) -> tuple[str, str | None, str | None, list[str]
     for keyword, record_type in _TYPED_HEADER_KEYWORDS.items():
         if keyword in upper_text:
             layout_variant = None
-            if record_type in ("cerai", "rujuk"):
+            if record_type in ("cerai", "rujuk", "nikah"):
                 layout_variant = (
                     "legacy" if _TYPED_LEGACY_ENACTMENT_KEYWORD in upper_text else "modern"
                 )

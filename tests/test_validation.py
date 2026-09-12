@@ -211,6 +211,77 @@ def test_validate_record_cerai_requires_tarikh_cerai() -> None:
     assert "Tarikh Cerai" in validated.missing_fields
 
 
+def test_validate_record_flags_cross_reference_row_as_not_a_record() -> None:
+    # Regression: a real 2009 Cerai legacy row (input/cerai/image00002.jpg,
+    # bil 05/2009) is a cross-reference note ("see the Rujuk book for this
+    # bil's certified copy"), not an actual divorce record -- it has no wife
+    # name, no ICs, no date, because none was ever meant to be written
+    # there. This must not be scored (and flagged for review) the same way
+    # as a genuine failed extraction.
+    record = ExtractedRecord(
+        record_type="CERAI",
+        bil="05/2009",
+        nama_suami="RUJUK BUKU DAFTAR SALINAN CERAI 01/2009",
+    )
+
+    validated = validate_record(
+        record,
+        CERAI_CELL_RESULTS,
+        VALIDATION_CONFIG,
+        layout_confidence=1.0,
+        record_type="cerai",
+    )
+
+    assert validated.status_review == "NOT_A_RECORD"
+    assert validated.missing_fields == []
+    assert "cross-reference note" in validated.review_reason[0]
+
+
+def test_validate_gemini_only_record_flags_cross_reference_row_as_not_a_record() -> None:
+    record = ExtractedRecord(
+        record_type="CERAI",
+        bil="08/2009",
+        nama_suami="RUJUK BUKU DAFTAR SALINAN CERAI 02/2009",
+    )
+
+    validated = validate_gemini_only_record(
+        record,
+        field_confidence={"bil": 0.9, "nama_suami": 0.9},
+        uncertain_fields=(),
+        validation_config=VALIDATION_CONFIG,
+        record_type="cerai",
+    )
+
+    assert validated.status_review == "NOT_A_RECORD"
+
+
+def test_validate_record_does_not_flag_real_record_that_merely_mentions_rujuk() -> None:
+    # A genuine Cerai record can legitimately mention "Rujuk" in its own
+    # remarks or cross-reference fields (e.g. bil_daftar_rujukan) while
+    # still having real spouse data -- must be scored normally, not swept
+    # into the cross-reference-note bucket just because the word appears.
+    record = ExtractedRecord(
+        record_type="CERAI",
+        bil="1/97",
+        nama_suami="ABDULLAH B. ABD HAMID",
+        ic_suami="A0394566",
+        nama_isteri="ZUBAIDAH BTE YAHYA",
+        ic_isteri="A0287541",
+        tarikh_cerai="1997-01-21",
+        hal_hal_lain="Rujuk buku daftar untuk salinan asal",
+    )
+
+    validated = validate_record(
+        record,
+        CERAI_CELL_RESULTS,
+        VALIDATION_CONFIG,
+        layout_confidence=1.0,
+        record_type="cerai",
+    )
+
+    assert validated.status_review == "OK"
+
+
 def test_validate_record_cerai_ok_without_ages_present() -> None:
     # Ages are only on the legacy layout -- the modern layout genuinely
     # omits them and must not be penalized for that.

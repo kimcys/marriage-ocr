@@ -59,7 +59,11 @@ ROUTING_TABLE: dict[tuple[str, str, str | None], str] = {
     ("handwritten", "cerai", "modern"): "config/handwritten_cerai_modern.yaml",
     ("handwritten", "rujuk", "legacy"): "config/handwritten_rujuk_legacy.yaml",
     ("handwritten", "rujuk", "modern"): "config/handwritten_rujuk_modern.yaml",
-    ("typed", "nikah", None): "config/typed_borang4b.yaml",
+    # Nikah now splits legacy/modern the same as Cerai/Rujuk (see
+    # NIKAH_LEGACY_REGIONS/NIKAH_MODERN_REGIONS in typed/template.py) --
+    # triage.py never emits ("typed", "nikah", None) any more.
+    ("typed", "nikah", "legacy"): "config/typed_nikah_legacy.yaml",
+    ("typed", "nikah", "modern"): "config/typed_nikah_modern.yaml",
     ("typed", "cerai", "legacy"): "config/typed_cerai_legacy.yaml",
     ("typed", "cerai", "modern"): "config/typed_cerai_modern.yaml",
     ("typed", "rujuk", "legacy"): "config/typed_rujuk_legacy.yaml",

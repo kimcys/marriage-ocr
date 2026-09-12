@@ -75,6 +75,24 @@ _STRICT_OUTPUT_FIELDS_RUJUK = {
     "tarikh_rujuk": "Tarikh Rujuk",
 }
 
+# nikah_legacy/nikah_modern (Borang 3A/4B) are also new templates (see
+# template.py's NIKAH_LEGACY_REGIONS/NIKAH_MODERN_REGIONS comment) --same
+# light-touch philosophy as Cerai/Rujuk above: only the core identity fields
+# plus Nikah's own defining field (mas_kahwin) are strict/retried. The many
+# descriptive fields this pair adds over the original borang_4b template
+# (bangsa, warganegara, alamat, wali IC/umur/alamat, witness IC, hari/masa/
+# tempat nikah, pernikahan kali, isteri ke, belanja hantaran, pemberian
+# lain) stay informational for the same reason.
+RETRY_PRIORITY_NIKAH_TYPED = ("bil", "nama_suami", "id_suami", "nama_isteri", "id_isteri", "mas_kahwin")
+_STRICT_OUTPUT_FIELDS_NIKAH_TYPED = {
+    "bil": "Bil",
+    "nama_suami": "Nama Suami",
+    "id_suami": "IC Suami",
+    "nama_isteri": "Nama Isteri",
+    "id_isteri": "IC Isteri",
+    "mas_kahwin": "Mas Kahwin",
+}
+
 _CONTAMINATION_LABELS = (
     "WARGANEGARA",
     "BANGSA",
@@ -161,6 +179,13 @@ def validate_record(
             strict_fields=_STRICT_OUTPUT_FIELDS_RUJUK,
             retry_priority=RETRY_PRIORITY_RUJUK,
             date_field="tarikh_rujuk",
+        )
+    if template_name == "nikah_legacy" or template_name == "nikah_modern":
+        return _validate_nikah_typed_record(
+            record,
+            raw_fields,
+            word_confidence_threshold=word_confidence_threshold,
+            max_retry_fields=max_retry_fields,
         )
     return _validate_borang_4b_record(
         record,
@@ -320,6 +345,87 @@ def _validate_borang_4b_record(
         diagnostics=diagnostics,
         retry_fields=ordered_retry_fields,
         failed_fields=ordered_failed_fields,
+        meaningful_field_count=meaningful_field_count,
+    )
+
+
+def _validate_nikah_typed_record(
+    record: ExtractedRecord,
+    raw_fields: Mapping[str, RawField],
+    *,
+    word_confidence_threshold: float,
+    max_retry_fields: int,
+) -> ValidationSummary:
+    """nikah_legacy/nikah_modern's own light validator -- can't reuse
+    _validate_cerai_or_rujuk_record as-is since that one checks a single
+    record.ic_suami/ic_isteri field, while Nikah (here and in the original
+    borang_4b path) splits IC into ic_lama_*/ic_baru_*."""
+    diagnostics: dict[str, FieldDiagnostic] = {}
+    retry_candidates: list[str] = []
+    failed_fields: list[str] = []
+
+    def mark(key: str, *, output_name: str, valid: bool, confidence: float, issues: Sequence[str] = ()) -> None:
+        diagnostics[key] = FieldDiagnostic(
+            key=key, output_name=output_name, valid=valid, confidence=confidence, issues=tuple(issues)
+        )
+        if not valid:
+            failed_fields.append(output_name)
+            if key not in retry_candidates:
+                retry_candidates.append(key)
+
+    for key, output_name in _STRICT_OUTPUT_FIELDS_NIKAH_TYPED.items():
+        raw = raw_fields.get(key)
+        raw_text = _text(raw.raw_text if raw else None)
+        confidence = float(raw.confidence if raw else 0.0)
+        issues: list[str] = []
+
+        if key == "bil":
+            valid = bool(record.bil and BIL_PATTERN.fullmatch(record.bil))
+        elif key == "nama_suami":
+            valid = bool(record.nama_suami and _non_label_text(record.nama_suami, output_name))
+        elif key == "id_suami":
+            valid = bool(record.ic_lama_suami or record.ic_baru_suami)
+            if record.ic_baru_suami and not re.fullmatch(r"\d{12}", record.ic_baru_suami):
+                valid = False
+        elif key == "nama_isteri":
+            valid = bool(record.nama_isteri and _non_label_text(record.nama_isteri, output_name))
+        elif key == "id_isteri":
+            valid = bool(record.ic_lama_isteri or record.ic_baru_isteri)
+            if record.ic_baru_isteri and not re.fullmatch(r"\d{12}", record.ic_baru_isteri):
+                valid = False
+        elif key == "mas_kahwin":
+            valid = bool(record.mas_kahwin and _valid_mas_kahwin(record.mas_kahwin))
+        else:  # pragma: no cover - defensive, every strict_fields key is handled above
+            valid = True
+
+        if raw_text and confidence < word_confidence_threshold:
+            valid = False
+            issues.append(f"confidence below threshold: {confidence:.3f}")
+
+        if not raw_text:
+            issues.append("missing field")
+            valid = False
+
+        mark(key, output_name=output_name, valid=valid, confidence=confidence, issues=issues)
+
+    meaningful_field_count = sum(
+        1
+        for value in [
+            record.bil,
+            record.nama_suami,
+            record.ic_lama_suami or record.ic_baru_suami,
+            record.nama_isteri,
+            record.ic_lama_isteri or record.ic_baru_isteri,
+            record.mas_kahwin,
+        ]
+        if value not in {None, ""}
+    )
+
+    ordered_retry_fields = tuple(key for key in RETRY_PRIORITY_NIKAH_TYPED if key in retry_candidates)[:max_retry_fields]
+    return ValidationSummary(
+        diagnostics=diagnostics,
+        retry_fields=ordered_retry_fields,
+        failed_fields=tuple(failed_fields),
         meaningful_field_count=meaningful_field_count,
     )
 

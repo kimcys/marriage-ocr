@@ -331,6 +331,8 @@ def _raw(raw_fields: dict[str, RawField], key: str) -> str | None:
 
 
 def build_extracted_record(raw_fields: dict[str, RawField], *, template_name: str = "borang_4b") -> ExtractedRecord:
+    if template_name == "nikah_legacy" or template_name == "nikah_modern":
+        return _build_nikah_typed_record(raw_fields, template_name=template_name)
     if template_name == "cerai_modern" or template_name == "cerai_legacy":
         return _build_cerai_record(raw_fields, template_name=template_name)
     if template_name == "rujuk_modern" or template_name == "rujuk_legacy":
@@ -408,6 +410,96 @@ def _build_nikah_record(raw_fields: dict[str, RawField]) -> ExtractedRecord:
         raw_tarikh_nikah=raw_fields.get("tarikh_nikah").raw_text if raw_fields.get("tarikh_nikah") else None,
         raw_tarikh_keluar=None,
         raw_remarks=None,
+    )
+    return record
+
+
+def _build_nikah_typed_record(raw_fields: dict[str, RawField], *, template_name: str) -> ExtractedRecord:
+    """Shared by nikah_legacy (Borang 3A) and nikah_modern (Borang 4B) -- same
+    pattern as _build_cerai_record/_build_rujuk_record below: one field set
+    covering both eras' superset, _raw() no-ops for whichever fields the
+    other era's REGIONS dict doesn't define. Deliberately separate from the
+    original _build_nikah_record above (kept untouched for borang_4b
+    backward compatibility) rather than merged into it, since that one's
+    field set and region key names (e.g. "id_suami" feeding split ic_lama/
+    ic_baru only, no bangsa/warganegara/alamat/wali-IC/saksi-IC at all)
+    predate and don't match either real layout.
+
+    id_wali/id_saksi_1/id_saksi_2 go through normalize_ic() and take
+    ic_baru-or-ic_lama the same way ic_suami/ic_isteri do below in
+    _build_cerai_record, even though ExtractedRecord stores them as single
+    fields (ic_wali/ic_saksi_1/ic_saksi_2, no lama/baru split) -- that
+    normalizer already handles both the old short-form and modern 12-digit
+    IC formats robustly, which a plain text passthrough would not.
+
+    Legacy's tarikh_lahir_suami/tarikh_lahir_isteri (the form prints a
+    birthdate, not an age) reuses the same shared field Cerai/Rujuk's typed
+    forms already populate for the identical reason -- umur_suami/
+    umur_isteri stay null for legacy, exactly as they already do for typed
+    Cerai/Rujuk legacy samples that show a birthdate instead of an age.
+    """
+    ic_lama_suami, ic_baru_suami = normalize_ic(_raw(raw_fields, "id_suami"))
+    ic_lama_isteri, ic_baru_isteri = normalize_ic(_raw(raw_fields, "id_isteri"))
+    ic_lama_wali, ic_baru_wali = normalize_ic(_raw(raw_fields, "id_wali"))
+    ic_wali = ic_baru_wali or ic_lama_wali
+    ic_lama_saksi_1, ic_baru_saksi_1 = normalize_ic(_raw(raw_fields, "id_saksi_1"))
+    ic_saksi_1 = ic_baru_saksi_1 or ic_lama_saksi_1
+    ic_lama_saksi_2, ic_baru_saksi_2 = normalize_ic(_raw(raw_fields, "id_saksi_2"))
+    ic_saksi_2 = ic_baru_saksi_2 or ic_lama_saksi_2
+
+    record = ExtractedRecord(
+        record_type="NIKAH",
+        bil=normalize_bil(_raw(raw_fields, "bil")),
+        no_siri=normalize_plain_text(_raw(raw_fields, "no_siri")),
+        tarikh_daftar=normalize_date_preserving_style(_raw(raw_fields, "tarikh_daftar")),
+        nama_suami=normalize_name(_raw(raw_fields, "nama_suami"), field_key="nama_suami"),
+        ic_lama_suami=ic_lama_suami,
+        ic_baru_suami=ic_baru_suami,
+        id_suami_raw=_raw(raw_fields, "id_suami"),
+        umur_suami=normalize_age(_raw(raw_fields, "umur_suami"), min_age=16, max_age=120),
+        tarikh_lahir_suami=normalize_birth_year_or_date(_raw(raw_fields, "tarikh_lahir_suami")),
+        warganegara_suami=normalize_plain_text(_raw(raw_fields, "warganegara_suami")),
+        bangsa_suami=normalize_plain_text(_raw(raw_fields, "bangsa_suami")),
+        alamat_suami=normalize_address(_raw(raw_fields, "alamat_suami")),
+        nama_isteri=normalize_name(_raw(raw_fields, "nama_isteri"), field_key="nama_isteri"),
+        ic_lama_isteri=ic_lama_isteri,
+        ic_baru_isteri=ic_baru_isteri,
+        id_isteri_raw=_raw(raw_fields, "id_isteri"),
+        umur_isteri=normalize_age(_raw(raw_fields, "umur_isteri"), min_age=16, max_age=120),
+        tarikh_lahir_isteri=normalize_birth_year_or_date(_raw(raw_fields, "tarikh_lahir_isteri")),
+        warganegara_isteri=normalize_plain_text(_raw(raw_fields, "warganegara_isteri")),
+        bangsa_isteri=normalize_plain_text(_raw(raw_fields, "bangsa_isteri")),
+        alamat_isteri=normalize_address(_raw(raw_fields, "alamat_isteri")),
+        nama_wali=normalize_name(_raw(raw_fields, "nama_wali"), field_key="nama_wali"),
+        ic_wali=ic_wali,
+        umur_wali=normalize_age(_raw(raw_fields, "umur_wali"), min_age=16, max_age=120),
+        hubungan_wali=normalize_plain_text(_raw(raw_fields, "hubungan_wali"), field_key="hubungan_wali"),
+        alamat_wali=normalize_address(_raw(raw_fields, "alamat_wali")),
+        saksi_1=normalize_plain_text(_raw(raw_fields, "saksi_1"), field_key="saksi_1"),
+        ic_saksi_1=ic_saksi_1,
+        saksi_2=normalize_plain_text(_raw(raw_fields, "saksi_2"), field_key="saksi_2"),
+        ic_saksi_2=ic_saksi_2,
+        tarikh_nikah=normalize_date_preserving_style(_raw(raw_fields, "tarikh_nikah")),
+        tarikh_nikah_raw=_raw(raw_fields, "tarikh_nikah"),
+        tarikh_nikah_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_nikah_hijri")),
+        hari_nikah=normalize_plain_text(_raw(raw_fields, "hari_nikah")),
+        masa_nikah=normalize_plain_text(_raw(raw_fields, "masa_nikah")),
+        tempat_nikah=normalize_address(_raw(raw_fields, "tempat_nikah")),
+        nama_pendaftar=normalize_plain_text(_raw(raw_fields, "nama_pendaftar"), field_key="nama_pendaftar"),
+        pernikahan_kali=normalize_plain_text(_raw(raw_fields, "pernikahan_kali")),
+        isteri_ke=normalize_plain_text(_raw(raw_fields, "isteri_ke")),
+        mas_kahwin=normalize_mas_kahwin(_raw(raw_fields, "mas_kahwin")),
+        mas_kahwin_raw=_raw(raw_fields, "mas_kahwin"),
+        belanja_hantaran=normalize_plain_text(_raw(raw_fields, "belanja_hantaran")),
+        pemberian_lain=normalize_plain_text(_raw(raw_fields, "pemberian_lain")),
+        jumlah_bayaran=normalize_money(_raw(raw_fields, "jumlah_bayaran")),
+        raw_bil=_raw(raw_fields, "bil"),
+        raw_suami_isteri=_first_non_empty([_raw(raw_fields, "nama_suami"), _raw(raw_fields, "id_suami")]),
+        raw_pendaftar=_raw(raw_fields, "nama_pendaftar"),
+        raw_wali=_raw(raw_fields, "nama_wali"),
+        raw_hubungan_wali=_raw(raw_fields, "hubungan_wali"),
+        raw_saksi=_first_non_empty([_raw(raw_fields, "saksi_1"), _raw(raw_fields, "saksi_2")]),
+        raw_tarikh_nikah=_raw(raw_fields, "tarikh_nikah"),
     )
     return record
 

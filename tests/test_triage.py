@@ -31,13 +31,24 @@ def test_classify_headers_detects_handwritten_rujuk():
     assert layout_variant == "legacy"
 
 
-def test_classify_headers_detects_typed_nikah():
+def test_classify_headers_detects_typed_nikah_modern():
     doc_type, record_type, layout_variant, _ = triage._classify_headers(
-        "SURAT PERAKUAN NIKAH KAHWIN CERAI DAN RUJUK"
+        "ENAKMEN UNDANG-UNDANG KELUARGA ISLAM (NEGERI SELANGOR) NO. 2 TAHUN 2003\n"
+        "BORANG 4B\nSURAT PERAKUAN NIKAH"
     )
     assert doc_type == "typed"
     assert record_type == "nikah"
-    assert layout_variant is None
+    assert layout_variant == "modern"
+
+
+def test_classify_headers_detects_typed_nikah_legacy():
+    doc_type, record_type, layout_variant, _ = triage._classify_headers(
+        "ENAKMEN UNDANG-UNDANG KELUARGA ISLAM SELANGOR NO. 4 TAHUN 1984\n"
+        "BORANG 3A/FORM 3A\nSURAT PERAKUAN NIKAH"
+    )
+    assert doc_type == "typed"
+    assert record_type == "nikah"
+    assert layout_variant == "legacy"
 
 
 def test_classify_headers_detects_typed_cerai_modern():
@@ -118,6 +129,56 @@ def test_classify_headers_ignores_cross_reference_mentions_outside_title_region(
     doc_type, record_type, _, _ = triage._classify_headers(text)
     assert doc_type == "handwritten"
     assert record_type == "cerai"
+
+
+def test_classify_headers_ignores_typed_cerai_cross_references_to_nikah_and_rujuk():
+    # Regression: a real typed Cerai certificate (Borang 10, input/cerai -
+    # typed/01740326145837082010.pdf) cross-references the original marriage
+    # and a prior reconciliation via printed lines "Bilangan Daftar Surat
+    # Perakuan Nikah" / "...Surat Perakuan Rujuk", both containing the exact
+    # substrings "SURAT PERAKUAN NIKAH"/"SURAT PERAKUAN RUJUK". Unlike the
+    # handwritten check, the typed check is not header-region-limited (a
+    # typed certificate's own title can appear several lines down), so this
+    # previously misclassified the page as Nikah before ever reaching the
+    # page's own "SURAT PERAKUAN CERAI" title.
+    text = "\n".join(
+        [
+            "No. Siri: 014074",
+            "(KETUA PENDAFTAR)",
+            "1 . Bilangan Daftar Cerai",
+            "(NEGERI SELANGOR NO. 2 TAHUN 2003)",
+            "(SUBSEKSYEN 55(g))",
+            "BORANG 10",
+            "SURAT PERAKUAN CERAI",
+            "536/2010",
+            "2 . Bilangan Daftar Surat Perakuan Nikah",
+            "3 . Bilangan Daftar Surat Perakuan Rujuk",
+        ]
+    )
+    doc_type, record_type, layout_variant, _ = triage._classify_headers(text)
+    assert doc_type == "typed"
+    assert record_type == "cerai"
+    assert layout_variant == "modern"
+
+
+def test_classify_headers_detects_typed_rujuk_apostrophe_spelling():
+    # Regression: a real typed Rujuk certificate (Borang 8B, input/rujuk -
+    # typed/03600124085069082010.pdf) prints "SURAT PERAKUAN RUJU'"
+    # (apostrophe, no trailing K) rather than "...RUJUK" -- previously fell
+    # through to doc_type="unknown" since only the K-ending spelling was
+    # matched.
+    text = "\n".join(
+        [
+            "(NEGERI SELANGOR NO. 2 TAHUN 2003)",
+            "(SUBSEKSYEN 52(9))",
+            "BORANG 8B",
+            "SURAT PERAKUAN RUJU'",
+        ]
+    )
+    doc_type, record_type, layout_variant, _ = triage._classify_headers(text)
+    assert doc_type == "typed"
+    assert record_type == "rujuk"
+    assert layout_variant == "modern"
 
 
 def test_classify_headers_unknown_when_no_keyword_matches():

@@ -37,6 +37,9 @@ def validate_record(
         validated.review_reason = ["OCR returned empty text"]
         return validated
 
+    if _is_cross_reference_note(validated):
+        return _mark_not_a_record(validated)
+
     scorer = _SCORERS.get(str(record_type or "nikah").strip().lower(), _score_nikah)
     reasons, missing_fields, critical, confidence = scorer(validated, validation_config)
 
@@ -88,6 +91,9 @@ def validate_gemini_only_record(
     """
     validated = replace(record, record_type=str(record_type or "nikah").strip().upper())
 
+    if _is_cross_reference_note(validated):
+        return _mark_not_a_record(validated)
+
     scorer = _SCORERS.get(str(record_type or "nikah").strip().lower(), _score_nikah)
     reasons, missing_fields, critical, confidence = scorer(validated, validation_config)
 
@@ -116,6 +122,57 @@ def validate_gemini_only_record(
         else "REVIEW"
     )
     return validated
+
+
+# A ledger row whose only content is a note pointing to a DIFFERENT register
+# book -- e.g. a legacy Cerai page's own "05/2009 / RUJUK BUKU DAFTAR / SALINAN
+# CERAI 01/2009" row -- rather than an actual Nikah/Cerai/Rujuk entry.
+# Confirmed on two real rows in the 2009 Cerai legacy sample
+# (input/cerai/image00002.jpg, bil 05/2009 and 08/2009): both have no wife
+# name, no ICs, no event date, because the row only exists to say "see the
+# Rujuk book for this bil's certified copy," not to record a marriage/
+# divorce/reconciliation. Without this check these scored as ordinary failed
+# extractions (missing every field, confidence ~0.25) alongside genuine
+# extraction failures, which would drown a real review queue in false
+# positives at volume -- there is nothing for a human to fix here, the page
+# just doesn't contain a record.
+_CROSS_REFERENCE_MARKERS = (
+    "RUJUK BUKU DAFTAR",
+    "CERAI BUKU DAFTAR",
+    "NIKAH BUKU DAFTAR",
+    "SALINAN CERAI",
+    "SALINAN RUJUK",
+    "SALINAN NIKAH",
+)
+
+
+def _is_cross_reference_note(record: ExtractedRecord) -> bool:
+    haystack = " ".join(
+        filter(None, [record.bil, record.nama_suami, record.nama_isteri, record.hal_hal_lain, record.catatan_raw])
+    ).upper()
+    if not any(marker in haystack for marker in _CROSS_REFERENCE_MARKERS):
+        return False
+    # Require the rest of the record to actually be empty -- a real record
+    # that merely *mentions* another book in its own remarks (a genuine
+    # cross-reference alongside real data, e.g. bil_daftar_rujukan) must
+    # still be scored normally, not swept into this bucket. Checks both
+    # Cerai/Rujuk's single ic_isteri and Nikah's split ic_lama_isteri/
+    # ic_baru_isteri, since this runs for all three record types.
+    return (
+        not record.nama_isteri
+        and not record.ic_suami
+        and not record.ic_isteri
+        and not record.ic_lama_isteri
+        and not record.ic_baru_isteri
+    )
+
+
+def _mark_not_a_record(record: ExtractedRecord) -> ExtractedRecord:
+    record.confidence = 0.0
+    record.status_review = "NOT_A_RECORD"
+    record.review_reason = ["cross-reference note to another register book, not an actual record"]
+    record.missing_fields = []
+    return record
 
 
 def parser_confidence_clears_threshold(record: ExtractedRecord, *, min_confidence: float) -> bool:

@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pymupdf as fitz
 
-from marriage_ocr.typed.models import PageOcrResult, PositionedWord, ProcessingStatus
-from marriage_ocr.typed.pipeline import process_typed_input
+from marriage_ocr.typed.models import PageOcrResult, PositionedWord, ProcessingStatus, TypedDocumentResult
+from marriage_ocr.typed.pipeline import _process_micro_batch, process_typed_input
 
 
 def _write_two_page_pdf(path: Path) -> None:
@@ -121,6 +121,59 @@ typed:
     assert result.discovered_pdfs == 2
     assert [record.source_file for record in result.records] == ["a.pdf", "b.pdf"]
     assert all(record.processing_status is ProcessingStatus.SUCCESS for record in result.records)
+
+
+def test_process_micro_batch_passes_each_pdfs_own_rendered_pages(monkeypatch, tmp_path: Path) -> None:
+    """Regression: _process_single_pdf's `pages` kwarg must come from THIS
+    pdf's own rendered pages, not whichever pdf the earlier
+    `for pdf in pdfs: pages = rendered.get(pdf.name)` loop (building
+    ordered_pages for the bulk OCR call) happened to leave `pages` bound to
+    when it exited. With a real >1-pdf micro-batch (pdf_batch_size=4 is the
+    default across every typed config, so this is the common case, not an
+    edge case) every pdf but the loop's last one previously got the wrong
+    pdf's RenderedPage tuple -- confirmed against a real 5-file typed Nikah
+    run where only the last pdf in the first 4-pdf batch came out clean."""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_two_page_pdf(input_dir / "a.pdf")
+    _write_two_page_pdf(input_dir / "b.pdf")
+    _write_two_page_pdf(input_dir / "c.pdf")
+
+    monkeypatch.setattr(
+        "marriage_ocr.typed.pipeline._ocr_micro_batch", lambda pages, client: _synthetic_complete_page_results(pages)
+    )
+
+    seen_pages: dict[str, tuple] = {}
+
+    def _fake_process_single_pdf(pdf, *, pages, **_kwargs):
+        seen_pages[pdf.name] = pages
+        return TypedDocumentResult(
+            record=SimpleNamespace(),
+            source_file=pdf.name,
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+
+    monkeypatch.setattr("marriage_ocr.typed.pipeline._process_single_pdf", _fake_process_single_pdf)
+
+    pdfs = sorted(input_dir.glob("*.pdf"))
+    _process_micro_batch(
+        pdfs=pdfs,
+        debug_path=tmp_path / "debug",
+        client=None,
+        typed_cfg={"pdf_dpi": 300, "render_workers": 4},
+        retry_cfg={},
+        validation_cfg={},
+        template_name="borang_4b",
+        record_type="NIKAH",
+    )
+
+    assert set(seen_pages) == {"a.pdf", "b.pdf", "c.pdf"}
+    for pdf in pdfs:
+        pages = seen_pages[pdf.name]
+        assert pages is not None
+        # Every RenderedPage handed to _process_single_pdf for this pdf must
+        # actually belong to this pdf, not a different one in the batch.
+        assert all(page.source_pdf == pdf for page in pages)
 
 
 _TYPED_CONFIG_TEXT = """

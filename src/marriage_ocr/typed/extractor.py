@@ -47,6 +47,8 @@ def _auto_field_output_names(template_name: str) -> dict[str, str]:
 
 FIELD_OUTPUT_NAMES_BY_TEMPLATE: dict[str, dict[str, str]] = {
     "borang_4b": FIELD_OUTPUT_NAMES_BORANG_4B,
+    "nikah_legacy": _auto_field_output_names("nikah_legacy"),
+    "nikah_modern": _auto_field_output_names("nikah_modern"),
     "cerai_modern": _auto_field_output_names("cerai_modern"),
     "cerai_legacy": _auto_field_output_names("cerai_legacy"),
     "rujuk_modern": _auto_field_output_names("rujuk_modern"),

@@ -36,6 +36,8 @@ from marriage_ocr.typed.vision import TypedVisionClient
 
 ProgressCallback = Callable[[str], None]
 
+LOGGER = get_logger(__name__)
+
 
 def _json_default(value: object) -> object:
     if isinstance(value, Path):
@@ -396,7 +398,16 @@ def _process_micro_batch(
         if ordered_pages:
             ocr_results = _ocr_micro_batch(ordered_pages, client)
             ocr_results_by_page = {(result.source_file, result.page_number): result for result in ocr_results}
-    except Exception:
+    except Exception as bulk_error:
+        # The bulk call covers every PDF in this micro-batch at once, so one
+        # bad request (or a response-count mismatch -- see
+        # TypedVisionClient.annotate_image_paths) fails all of them here.
+        # Logged (rather than silently discarded) since the per-PDF retry
+        # below can itself fail for a different, unrelated reason, and
+        # without this the real cause of that second failure was never
+        # recorded anywhere -- see errors[pdf.name] below, which is what
+        # actually reaches the CSV's Error Message column.
+        LOGGER.warning("Bulk Vision OCR call failed for micro-batch, retrying per-PDF: %s", bulk_error)
         ocr_results_by_page = {}
         for pdf in pdfs:
             pages = rendered.get(pdf.name)
@@ -412,7 +423,14 @@ def _process_micro_batch(
 
     results: list[TypedDocumentResult] = []
     for pdf in pdfs:
-        if pdf.name in errors and rendered.get(pdf.name) is None:
+        if pdf.name in errors:
+            # Covers both a render failure (rendered[pdf.name] is None) and
+            # an OCR failure after a successful render -- either way, we
+            # never have valid data for this PDF, so report the actual
+            # captured reason instead of falling through to
+            # _process_single_pdf, which would otherwise report a
+            # generic/misleading "Missing OCR results" for a page whose
+            # true failure reason is already known here.
             results.append(_record_failure(pdf.name, errors[pdf.name], debug_dir=debug_path / pdf.stem))
             continue
         try:
@@ -424,7 +442,18 @@ def _process_micro_batch(
                     typed_cfg=typed_cfg,
                     retry_cfg=retry_cfg,
                     validation_cfg=validation_cfg,
-                    pages=pages,
+                    # Fetched fresh per-pdf here -- NOT the `pages` name bound
+                    # by the `for pdf in pdfs:` loop above (that one goes out
+                    # of scope semantically but not lexically in Python, and
+                    # using it directly here silently reused whichever PDF
+                    # was last rendered above for every other PDF's
+                    # extraction in a >1-PDF micro-batch. Confirmed: with
+                    # pdf_batch_size=4 (the default across every typed
+                    # config), a real 5-file Nikah run batched the first 4
+                    # files together and only the batch's last file came out
+                    # clean -- the other 3 were silently extracted against
+                    # the last file's rendered pages instead of their own.
+                    pages=rendered.get(pdf.name),
                     ocr_results_by_page=ocr_results_by_page,
                     template_name=template_name,
                     record_type=record_type,

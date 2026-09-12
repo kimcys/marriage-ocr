@@ -274,7 +274,7 @@ def test_run_batch_routes_typed_doc_type_to_typed_pipeline(monkeypatch, tmp_path
         batch_runner.triage,
         "classify_file",
         lambda path, **kwargs: Classification(
-            doc_type="typed", record_type="nikah", layout_variant=None,
+            doc_type="typed", record_type="nikah", layout_variant="modern",
             is_jawi=False, jawi_proportion=0.0,
         ),
     )
@@ -296,7 +296,10 @@ def test_run_batch_routes_typed_doc_type_to_typed_pipeline(monkeypatch, tmp_path
     )
 
     assert len(typed_calls) == 1
-    assert typed_calls[0]["config_path"] == Path("config/typed_borang4b.yaml")
+    # Nikah splits legacy/modern the same as Cerai/Rujuk now (see
+    # NIKAH_LEGACY_REGIONS/NIKAH_MODERN_REGIONS in typed/template.py) --
+    # triage never emits ("typed", "nikah", None) any more.
+    assert typed_calls[0]["config_path"] == Path("config/typed_nikah_modern.yaml")
 
 
 def test_run_batch_blocks_typed_record_type_with_no_template(monkeypatch, tmp_path: Path):
@@ -504,7 +507,7 @@ def test_run_batch_processes_typed_files_concurrently(monkeypatch, tmp_path: Pat
         batch_runner.triage,
         "classify_file",
         lambda path, **kwargs: Classification(
-            doc_type="typed", record_type="nikah", layout_variant=None,
+            doc_type="typed", record_type="nikah", layout_variant="modern",
             is_jawi=False, jawi_proportion=0.0,
         ),
     )
@@ -547,7 +550,7 @@ def test_run_batch_inserts_typed_results_with_mapped_status(monkeypatch, tmp_pat
         batch_runner.triage,
         "classify_file",
         lambda path, **kwargs: Classification(
-            doc_type="typed", record_type="nikah", layout_variant=None,
+            doc_type="typed", record_type="nikah", layout_variant="modern",
             is_jawi=False, jawi_proportion=0.0,
         ),
     )

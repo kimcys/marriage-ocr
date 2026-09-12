@@ -40,6 +40,143 @@ BORANG_4B_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
 
 
 # ---------------------------------------------------------------------------
+# Typed Nikah certificates -- NOT one template. Real attached samples
+# (input/nikah - typed/*.pdf) split the same way Cerai/Rujuk already do: a
+# pre-2003 legacy form under Enakmen No. 4 Tahun 1984 ("Borang 3A/Form 3A",
+# Seksyen 26, titled "SURAT PERAKUAN NIKAH") and a post-2003 modern form
+# under Enakmen No. 2 Tahun 2003 ("Borang 4B", Subseksyen 26(1) dan (2)).
+# BORANG_4B_REGIONS above predates this split and was calibrated against
+# neither real layout -- confirmed by processing all 5 real attached
+# samples: 3 were legacy Borang 3A (1990, 2000, 2005) and 2 were modern
+# Borang 4B (2009, 2020), and BORANG_4B_REGIONS produced garbled output on
+# effectively all of them (its tarikh_nikah/alamat_pendaftar/nama_pendaftar
+# regions bleed into each other -- see typed/validator.py's
+# _CONTAMINATION_LABELS comment, which already documented this). Kept as-is
+# for backward compatibility (marriage-be's TYPED_BORANG_4B document type
+# still points at config/typed_borang4b.yaml, which still names template:
+# borang_4b) -- new documents should route to nikah_legacy/nikah_modern
+# below via triage.py instead.
+#
+# Coordinates below are first-pass measurements from one representative
+# sample per layout (word-position extraction cross-checked against a
+# rendered page image, not guessed) -- same calibration confidence level as
+# every other template in this file. NIKAH_MODERN_REGIONS (input/nikah -
+# typed/014970379082009.pdf, a clean well-aligned scan with a mostly-legible
+# text layer) is higher-confidence than NIKAH_LEGACY_REGIONS (input/nikah -
+# typed/01490612085274082005.pdf, whose embedded text layer is badly
+# garbled character-by-character even though the page image itself is
+# crisp -- label positions were still usable, but exact value boundaries
+# are a first-pass estimate). Verify against page_N_regions.png debug
+# output before trusting either at volume, especially the legacy one.
+#
+# NIKAH_LEGACY (Borang 3A) is a real 2-page PDF, but every field this
+# template extracts lives on page 1 -- page 2 of every legacy sample is a
+# separate "SURAT PERAKUAN TALIQ" declaration (the husband's conditional-
+# divorce pronouncement), not a continuation of the marriage certificate's
+# own fields. It happens to restate the wife's name and the marriage date,
+# but has no fields this template needs that aren't already on page 1, so
+# there are deliberately no page-2 region entries below (TEMPLATES still
+# registers this as "pages": 2, since render_typed_pdf hard-fails on an
+# actual page-count mismatch).
+NIKAH_LEGACY_REGIONS: dict[str, tuple[int, Region]] = {
+    "no_siri": (1, Region(0.78, 0.246, 0.95, 0.283)),
+    "bil": (1, Region(0.40, 0.304, 0.92, 0.327)),
+    "tarikh_nikah": (1, Region(0.35, 0.360, 0.65, 0.386)),
+    "tarikh_daftar": (1, Region(0.35, 0.390, 0.65, 0.430)),
+    "nama_suami": (1, Region(0.32, 0.415, 0.92, 0.436)),
+    "id_suami": (1, Region(0.30, 0.441, 0.55, 0.463)),
+    "tarikh_lahir_suami": (1, Region(0.68, 0.441, 0.88, 0.463)),
+    "alamat_suami": (1, Region(0.28, 0.464, 0.92, 0.487)),
+    "nama_isteri": (1, Region(0.30, 0.484, 0.92, 0.506)),
+    "id_isteri": (1, Region(0.30, 0.505, 0.55, 0.528)),
+    "tarikh_lahir_isteri": (1, Region(0.68, 0.505, 0.88, 0.528)),
+    "alamat_isteri": (1, Region(0.28, 0.529, 0.92, 0.552)),
+    "nama_wali": (1, Region(0.30, 0.545, 0.92, 0.567)),
+    "id_wali": (1, Region(0.30, 0.563, 0.55, 0.586)),
+    "alamat_wali": (1, Region(0.28, 0.580, 0.92, 0.603)),
+    "hubungan_wali": (1, Region(0.30, 0.608, 0.55, 0.630)),
+    "saksi_1": (1, Region(0.29, 0.652, 0.92, 0.672)),
+    "id_saksi_1": (1, Region(0.30, 0.677, 0.55, 0.700)),
+    "saksi_2": (1, Region(0.29, 0.722, 0.92, 0.742)),
+    "id_saksi_2": (1, Region(0.30, 0.741, 0.55, 0.764)),
+    "mas_kahwin": (1, Region(0.38, 0.780, 0.60, 0.803)),
+    "belanja_hantaran": (1, Region(0.42, 0.800, 0.62, 0.823)),
+    "pemberian_lain": (1, Region(0.48, 0.865, 0.68, 0.888)),
+    "jumlah_bayaran": (1, Region(0.25, 0.916, 0.55, 0.941)),
+}
+
+NIKAH_LEGACY_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
+    1: {
+        "SURAT PERAKUAN NIKAH": (0.4077, 0.2467),
+        "NAMA WALI": (0.1810, 0.5463),
+    },
+}
+
+NIKAH_MODERN_REGIONS: dict[str, tuple[int, Region]] = {
+    "no_siri": (1, Region(0.83, 0.030, 0.95, 0.068)),
+    "bil": (1, Region(0.36, 0.304, 0.50, 0.318)),
+    # x2 narrowed well short of 0.86 -- this form repeats its own "No. Siri"
+    # serial as a faint stamp at several points down the right margin (see
+    # no_siri's own region above and its recurrence near alamat_wali below),
+    # and 0.68-0.86 overlapped one of those repeats, bleeding "No. Siri :"
+    # into tarikh_daftar's raw text. Confirmed: that alone was enough to
+    # break normalize_date_preserving_style (rejects any trailing noise,
+    # unlike normalize_bil's more forgiving pattern search).
+    "tarikh_daftar": (1, Region(0.68, 0.304, 0.76, 0.318)),
+    "nama_suami": (1, Region(0.35, 0.435, 0.92, 0.456)),
+    "id_suami": (1, Region(0.35, 0.453, 0.52, 0.472)),
+    "umur_suami": (1, Region(0.65, 0.453, 0.78, 0.472)),
+    "warganegara_suami": (1, Region(0.30, 0.470, 0.52, 0.490)),
+    "bangsa_suami": (1, Region(0.65, 0.470, 0.85, 0.490)),
+    "alamat_suami": (1, Region(0.30, 0.487, 0.92, 0.524)),
+    "nama_isteri": (1, Region(0.35, 0.577, 0.92, 0.598)),
+    "id_isteri": (1, Region(0.35, 0.595, 0.52, 0.614)),
+    "umur_isteri": (1, Region(0.65, 0.595, 0.78, 0.614)),
+    "warganegara_isteri": (1, Region(0.30, 0.612, 0.52, 0.631)),
+    "bangsa_isteri": (1, Region(0.65, 0.612, 0.85, 0.631)),
+    "alamat_isteri": (1, Region(0.30, 0.629, 0.92, 0.665)),
+    "nama_wali": (1, Region(0.35, 0.718, 0.92, 0.738)),
+    "id_wali": (1, Region(0.35, 0.736, 0.52, 0.755)),
+    "umur_wali": (1, Region(0.65, 0.736, 0.78, 0.755)),
+    "hubungan_wali": (1, Region(0.19, 0.752, 0.45, 0.771)),
+    # x2 narrowed (this form's own "No. Siri" serial repeats as a faint
+    # stamp down the right margin -- see tarikh_daftar's comment above; here
+    # it bled in as a trailing "No. Siri : <serial>" on alamat_wali's own
+    # second line).
+    "alamat_wali": (1, Region(0.35, 0.770, 0.80, 0.806)),
+    "saksi_1": (2, Region(0.35, 0.133, 0.92, 0.153)),
+    "id_saksi_1": (2, Region(0.35, 0.150, 0.52, 0.170)),
+    "saksi_2": (2, Region(0.35, 0.246, 0.92, 0.266)),
+    "id_saksi_2": (2, Region(0.35, 0.264, 0.52, 0.283)),
+    "tarikh_nikah_hijri": (2, Region(0.33, 0.363, 0.47, 0.383)),
+    "tarikh_nikah": (2, Region(0.32, 0.379, 0.50, 0.402)),
+    "hari_nikah": (2, Region(0.51, 0.369, 0.63, 0.389)),
+    "masa_nikah": (2, Region(0.70, 0.369, 0.92, 0.389)),
+    "tempat_nikah": (2, Region(0.30, 0.404, 0.92, 0.424)),
+    "nama_pendaftar": (2, Region(0.40, 0.421, 0.92, 0.445)),
+    "pernikahan_kali": (2, Region(0.30, 0.446, 0.47, 0.466)),
+    "isteri_ke": (2, Region(0.53, 0.446, 0.68, 0.466)),
+    "mas_kahwin": (2, Region(0.20, 0.464, 0.40, 0.488)),
+    # x1 shifted right of "Belanja Hantaran:"/"Pemberian Lain (Jika Ada)"'s
+    # own printed label (first-pass regions started inside the label
+    # itself, capturing label text instead of the value beside it).
+    "belanja_hantaran": (2, Region(0.30, 0.488, 0.55, 0.508)),
+    "pemberian_lain": (2, Region(0.40, 0.509, 0.65, 0.529)),
+}
+
+NIKAH_MODERN_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
+    1: {
+        "A MAKLUMAT PASANGAN": (0.1562, 0.3854),
+        "B MAKLUMAT WALI": (0.1566, 0.6965),
+    },
+    2: {
+        "C MAKLUMAT SAKSI": (0.1574, 0.0871),
+        "D BUTIR BUTIR PERNIKAHAN": (0.1570, 0.3364),
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # Cerai / Rujuk typed certificates -- NOT single templates each. Real
 # attached samples (input/cerai - typed/*.pdf, input/rujuk - typed/*.pdf)
 # show the same legacy/modern split already found in the handwritten
@@ -229,6 +366,14 @@ RUJUK_LEGACY_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
 
 TEMPLATES: dict[str, dict[str, Any]] = {
     "borang_4b": {"regions": BORANG_4B_REGIONS, "anchors": BORANG_4B_ANCHORS, "pages": 2},
+    # "pages": 2 even though every field this template extracts lives on
+    # page 1 -- the PDF itself is genuinely 2 physical pages (page 2 is the
+    # bundled "Surat Perakuan Taliq" declaration, see NIKAH_LEGACY_REGIONS's
+    # own comment above), and render_typed_pdf hard-fails on a page-count
+    # mismatch. Confirmed against all 3 real legacy samples: every one is a
+    # 2-page PDF this way, not 1.
+    "nikah_legacy": {"regions": NIKAH_LEGACY_REGIONS, "anchors": NIKAH_LEGACY_ANCHORS, "pages": 2},
+    "nikah_modern": {"regions": NIKAH_MODERN_REGIONS, "anchors": NIKAH_MODERN_ANCHORS, "pages": 2},
     "cerai_modern": {"regions": CERAI_MODERN_REGIONS, "anchors": CERAI_MODERN_ANCHORS, "pages": 2},
     "cerai_legacy": {"regions": CERAI_LEGACY_REGIONS, "anchors": CERAI_LEGACY_ANCHORS, "pages": 1},
     "rujuk_modern": {"regions": RUJUK_MODERN_REGIONS, "anchors": RUJUK_MODERN_ANCHORS, "pages": 2},
