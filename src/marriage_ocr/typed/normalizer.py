@@ -108,7 +108,12 @@ _TRAILING_NOISE_PATTERN = re.compile(
     # behind as if it were content; hari_nikah's own leading-label pattern
     # already consumes "hari" from the FRONT of its own line before this
     # runs, so this only ever strips a bled-in trailing occurrence.
-    r"TARIKH\s*LAHIR|TARIKH\s*MASUK\s*ISLAM|TARIKH\s*NIKAH|TARIKH\s*DAFTAR|HARI|"
+    # TEMPAT bare -- confirmed on a real client sample: tarikh_nikah_hijri's
+    # region bled in tempat_nikah's whole "Tempat : PEJABAT AGAMA ISLAM
+    # DAERAH SABAK" row from directly below when the Hijri date itself was
+    # blank, the same "next section's row survives when this one is blank"
+    # pattern already fixed for HARI below.
+    r"TARIKH\s*LAHIR|TARIKH\s*MASUK\s*ISLAM|TARIKH\s*NIKAH|TARIKH\s*DAFTAR|HARI|TEMPAT|"
     # ISTERI bare, not just "ISTERI KE" -- pernikahan_kali's own row can wrap
     # so only "Isteri" (no "ke") lands at its tail (confirmed on a real
     # sample); by the time isteri_ke's own leading-label pattern runs on its
@@ -129,15 +134,17 @@ _TRAILING_NOISE_PATTERN = re.compile(
 # is a form's underline rather than punctuation (unlike a single trailing
 # abbreviation dot, e.g. "P.P.T.", which this leaves alone).
 _TRAILING_SYMBOL_NOISE = re.compile(r"(?:[✓✗]+|[.\-–—_]{2,})\s*$")
-# A bare, dangling "No." (or "No") at the very end of a line, nothing after
-# it -- typed Nikah's own "No. Siri : ######" stamp repeats down the page's
-# right margin (see the module-level comments on NIKAH_MODERN_REGIONS'
-# no_siri/tarikh_daftar/alamat_wali entries), and a field's own right
-# boundary sometimes lands between "No." and its serial, leaving just this
-# fragment behind. Anchored at end-of-line so it never touches a real
+# A bare, dangling "No." (or "No", or "No. :" with the label's own trailing
+# colon and nothing after it) at the very end of a line -- typed Nikah's own
+# "No. Siri : ######" stamp repeats down the page's right margin (see the
+# module-level comments on NIKAH_MODERN_REGIONS' no_siri/tarikh_daftar/
+# alamat_wali entries), and a field's own right boundary sometimes lands
+# between "No." and its serial, leaving just this fragment behind --
+# confirmed on a real client sample where this bled into nama_isteri as a
+# trailing "No. :". Anchored at end-of-line so it never touches a real
 # in-progress house number like "NO. 19 , JLN ..." (there is always more
 # text after "No." there).
-_TRAILING_BARE_NO_PATTERN = re.compile(r"\(?\s*\bno\.?\s*$", re.IGNORECASE)
+_TRAILING_BARE_NO_PATTERN = re.compile(r"\(?\s*\bno\.?\s*:?\s*$", re.IGNORECASE)
 # The "( KETUA PENDAFTAR )" registrar-stamp is a *bounded* parenthetical
 # (a title, "KETUA" plus exactly one more word) that can land mid-line,
 # not just at the end -- confirmed on a real modern sample where Vision
@@ -148,6 +155,24 @@ _TRAILING_BARE_NO_PATTERN = re.compile(r"\(?\s*\bno\.?\s*$", re.IGNORECASE)
 # also eat that real trailing content, so this only removes the bounded
 # "(KETUA <one word>)" span itself, truncated or not, wherever it sits.
 _KETUA_STAMP_PATTERN = re.compile(r"\(?\s*ketua\s+[a-z]+\.?\s*\)?\s*", re.IGNORECASE)
+# The same stamp, but with nothing legible after "KETUA" (its own following
+# word/paren got cut off entirely, not just abbreviated) -- confirmed on
+# three real client samples: "... SELANGOR CKETUA" (the stamp's leading "("
+# misread as a stray "C" glued directly to the word), "... SELANGOR (
+# KETUA" (the "(" read correctly, still nothing legible after "KETUA"), and
+# a bare "... JALAN RIZAB KETUA" (no paren survived at all). _KETUA_STAMP_
+# PATTERN above requires a word after "ketua" and matches none of these.
+# Three alternatives, not one permissive pattern -- an earlier, looser
+# version ("optional single letter, optional whitespace, then ketua") also
+# matched into the *end of a real preceding word* ("JALAN RIZAB KETUA" ->
+# "JALAN RIZA", eating the "B") since nothing stopped the stray-letter slot
+# from grabbing it. Each alternative below is anchored to a genuinely
+# distinct, non-overlapping shape: a lone letter with no word character
+# before it (negative lookbehind) directly glued to "ketua"; an explicit
+# "(" (with or without a following space); or "ketua" as its own word
+# (\b), which requires a non-letter immediately before "k" and so cannot
+# reach into "RIZAB".
+_TRAILING_BARE_KETUA_PATTERN = re.compile(r"(?:(?<![a-z])[a-z]ketua|\(\s*ketua|\bketua)\s*$", re.IGNORECASE)
 _LOCATION_NOISE = (
     "DAERAH",
     "SELANGOR",
@@ -336,7 +361,8 @@ def _strip_trailing_noise(value: str) -> str:
     value = _TRAILING_NOISE_PATTERN.sub("", value).strip()
     value = _TRAILING_SYMBOL_NOISE.sub("", value).strip()
     value = _TRAILING_BARE_NO_PATTERN.sub("", value).strip()
-    return _KETUA_STAMP_PATTERN.sub("", value).strip()
+    value = _KETUA_STAMP_PATTERN.sub("", value).strip()
+    return _TRAILING_BARE_KETUA_PATTERN.sub("", value).strip()
 
 
 def _score_line_for_field(line: str, field_key: str | None) -> tuple[int, int, int]:
@@ -360,6 +386,12 @@ def _score_line_for_field(line: str, field_key: str | None) -> tuple[int, int, i
         # alone once Nikah's widened regions started letting that bleed in).
         if any(token in upper for token in ("PERTAMA", "KEDUA", "KETIGA", "KEEMPAT", "KELIMA")):
             score += 10
+        # A person's name is never a valid isteri_ke/pernikahan_kali value --
+        # confirmed on a real client sample where isteri_ke came back as
+        # nama_pendaftar's own full name ("MOHD YUSOF BIN MOHD TAHIR") with
+        # no ordinal word anywhere in the candidates to outscore it.
+        if any(hint in upper for hint in ("BIN", "BINTI", "HAJI", "HJ", "USTAZ", "TUAN")):
+            score -= 6
     if field_key == "alamat_pendaftar":
         if any(token in upper for token in ("PEJABAT", "ALAMAT", "TEMPAT")):
             score += 3
@@ -398,6 +430,23 @@ def _select_best_line(lines: list[str], field_key: str | None) -> str | None:
         digit_candidates = [line for line in candidates if any(char.isdigit() for char in line)]
         if digit_candidates:
             candidates = digit_candidates
+        if field_key in ("pernikahan_kali", "isteri_ke"):
+            # A person's name is never a valid value here -- the -6 scoring
+            # penalty above only helps when there's a *better* candidate to
+            # prefer instead, but on a real client sample this field's only
+            # candidate at all was a bled-in "MOHD YUSOF BIN MOHD TAHIR"
+            # (the true value was genuinely blank on that document), so
+            # scoring alone still picked it: max() over one candidate
+            # returns that candidate regardless of its score. Drop any
+            # name-shaped, non-ordinal candidate outright, unless doing so
+            # would leave nothing at all to select from.
+            name_free = [
+                line
+                for line in candidates
+                if not any(hint in line.upper() for hint in ("BIN", "BINTI", "HAJI", "HJ", "USTAZ", "TUAN"))
+            ]
+            if name_free:
+                candidates = name_free
     else:
         no_digit = [line for line in candidates if not any(char.isdigit() for char in line)]
         if no_digit:
@@ -422,6 +471,18 @@ def normalize_plain_text(raw: str | None, *, field_key: str | None = None) -> st
     if value is None:
         return None
     value = re.sub(r"\s+", " ", value).strip(" ,")
+    if field_key in ("pernikahan_kali", "isteri_ke") and value:
+        # Last-resort reject, after selection: on a real client sample this
+        # field's only candidate at all was a bled-in registrar's name (the
+        # true value was genuinely blank on that document), so there was
+        # nothing for _select_best_line's filtering/scoring above to prefer
+        # instead -- a wrong confident name is worse than admitting the
+        # field is unreadable here.
+        upper = value.upper()
+        has_name_hint = any(hint in upper for hint in ("BIN", "BINTI", "HAJI", "HJ", "USTAZ", "TUAN"))
+        has_ordinal = any(token in upper for token in ("PERTAMA", "KEDUA", "KETIGA", "KEEMPAT", "KELIMA"))
+        if has_name_hint and not has_ordinal:
+            return None
     return value or None
 
 

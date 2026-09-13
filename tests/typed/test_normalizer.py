@@ -290,3 +290,70 @@ def test_alamat_wali_strips_a_truncated_ketua_stamp_without_losing_real_content(
         )
         == "KAMPUNG SUNGAI PAU JENIANG , KEDAH"
     )
+
+
+# --- Regressions from a real client OneDrive batch --------------------------
+#
+# Found by actually running process-typed against a real client-supplied
+# link (20 real modern Nikah certificates), not guessed -- each case below
+# is the literal raw_text this pipeline captured on one of those documents.
+
+
+def test_tarikh_nikah_hijri_drops_a_bled_in_tempat_row() -> None:
+    # Regression: on a real client sample, tarikh_nikah_hijri's Hijri date
+    # was genuinely blank, and tempat_nikah's whole row bled in from directly
+    # below instead ("Tempat : PEJABAT AGAMA ISLAM DAERAH SABAK"). TEMPAT
+    # wasn't a recognised trailing-noise keyword, so it survived as if it
+    # were tarikh_nikah_hijri's own value.
+    assert normalize_plain_text("Tempat : PEJABAT AGAMA ISLAM DAERAH SABAK", field_key="tarikh_nikah_hijri") is None
+
+
+def test_nama_isteri_drops_a_bled_in_no_colon_fragment() -> None:
+    # Regression: a real client sample's nama_isteri came back as "MARIAM
+    # BIN DEROM No. :" -- a neighbouring field's "No. <label> :" bled in
+    # with a trailing colon _TRAILING_BARE_NO_PATTERN didn't yet cover
+    # (it only matched a bare "No."/"No", not one with ": " after it).
+    assert normalize_plain_text("MARIAM BIN DEROM No. :", field_key="nama_isteri") == "MARIAM BIN DEROM"
+
+
+def test_alamat_wali_drops_a_garbled_ketua_stamp_with_no_following_word() -> None:
+    # Regression: a real client sample's alamat_wali ended in "... SELANGOR
+    # CKETUA" -- the same registrar stamp as the KETUA_STAMP_PATTERN case
+    # above, but here Vision misread the stamp's leading "(" as a "C" *and*
+    # dropped everything after "KETUA", so neither existing KETUA pattern
+    # (which both expect a following word) matched.
+    assert (
+        normalize_wrapped_field("PARIT 7 BARAT 45300 SUNGAI BESAR , SELANGOR CKETUA", field_key="alamat_wali")
+        == "PARIT 7 BARAT 45300 SUNGAI BESAR , SELANGOR"
+    )
+
+
+def test_alamat_wali_drops_a_bare_parenthesised_ketua_with_no_following_word() -> None:
+    # Regression: a second real client sample ended in "... SELANGOR (
+    # KETUA" -- the stamp's own leading "(" read correctly this time, but
+    # still nothing legible after "KETUA".
+    assert (
+        normalize_wrapped_field(
+            "NO . 1 SURAU PARIT SERONG SIMPANG LIMA 45300 SUNGAI BESAR , SELANGOR ( KETUA",
+            field_key="alamat_wali",
+        )
+        == "NO . 1 SURAU PARIT SERONG SIMPANG LIMA 45300 SUNGAI BESAR , SELANGOR"
+    )
+
+
+def test_alamat_wali_drops_a_bare_trailing_ketua_word() -> None:
+    # Regression: a third real client sample ended in "... RIZAB KETUA" --
+    # the stamp's parenthesis missing entirely this time, just the bare word.
+    assert (
+        normalize_wrapped_field("PARIT 9 TIMUR JALAN RIZAB KETUA", field_key="alamat_wali")
+        == "PARIT 9 TIMUR JALAN RIZAB"
+    )
+
+
+def test_isteri_ke_rejects_a_bled_in_registrars_name_outright() -> None:
+    # Regression: a real client sample's isteri_ke raw text was just
+    # "MOHD YUSOF BIN MOHD TAHIR" -- nama_pendaftar's own name, with no
+    # ordinal-word candidate anywhere to prefer instead (the true value was
+    # genuinely blank on that document). A wrong confident name is worse
+    # than admitting the field is unreadable.
+    assert normalize_plain_text("MOHD YUSOF BIN MOHD TAHIR", field_key="isteri_ke") is None
