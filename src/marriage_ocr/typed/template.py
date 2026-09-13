@@ -193,7 +193,18 @@ NIKAH_MODERN_REGIONS: dict[str, tuple[int, Region]] = {
     "umur_suami": (1, Region(0.58, 0.440, 0.90, 0.471)),
     "warganegara_suami": (1, Region(0.13, 0.456, 0.58, 0.491)),
     "bangsa_suami": (1, Region(0.53, 0.456, 0.90, 0.491)),
-    "alamat_suami": (1, Region(0.13, 0.479, 0.92, 0.521)),
+    # y2 widened from 0.521 to 0.560 -- confirmed on 11 of 20 real client
+    # samples that this region was too short to reach the address's own
+    # wrapped second line (postcode/town/state, e.g. "45300 SUNGAI BESAR ,
+    # SELANGOR"): the old height (0.042) only reliably fit the "Alamat :
+    # <street>" line itself plus the bled-in Warganegara/Bangsa row above
+    # it, unlike alamat_isteri/alamat_wali (heights 0.054/0.063) which
+    # already reach far enough to capture both address lines. The new
+    # bound still leaves an 0.008 margin before nama_isteri's own row
+    # starts (0.568), and any bled-in "Nama Isteri : ..." line that does
+    # drift up into it is already dropped by the bare NAMA keyword in
+    # _TRAILING_NOISE_PATTERN.
+    "alamat_suami": (1, Region(0.13, 0.479, 0.92, 0.560)),
     "nama_isteri": (1, Region(0.13, 0.568, 0.90, 0.597)),
     "id_isteri": (1, Region(0.13, 0.590, 0.62, 0.621)),
     "umur_isteri": (1, Region(0.58, 0.590, 0.90, 0.621)),
