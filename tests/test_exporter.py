@@ -10,6 +10,7 @@ from openpyxl.utils import get_column_letter
 
 from marriage_ocr import exporter as exporter_module
 from marriage_ocr.exporter import (
+    EXPORT_COLUMN_TO_FIELD,
     PUBLIC_CSV_COLUMNS,
     PUBLIC_XLSX_COLUMNS,
     XLSX_COLUMNS,
@@ -65,6 +66,30 @@ def test_exporter_writes_csv_schema_and_row(tmp_path: Path) -> None:
     assert "Source File" not in rows[0]
     assert "Created At" not in rows[0]
     assert "Updated At" not in rows[0]
+
+
+def test_exporter_drops_nikah_only_duplicate_columns() -> None:
+    # Per explicit client request: these either duplicated an already-parsed
+    # sibling column under a different name (e.g. "ID Suami Raw" vs. "IC Lama/
+    # Baru Suami"), or added a Nikah-only column with no other use, cluttering
+    # the exported/displayed record with no distinct information. The
+    # underlying ExtractedRecord fields (mas_kahwin_raw, tarikh_keluar_raw,
+    # etc.) are untouched -- validation.py/pipeline.py still use them
+    # internally -- only the exported/displayed columns are gone.
+    removed_columns = {
+        "ID Isteri Raw",
+        "ID Suami Raw",
+        "Mas Kahwin Raw",
+        "Tarikh Keluar Raw",
+        "Kad Pengenalan/Passport Saksi 1",
+        "Kad Pengenalan/Passport Saksi 2",
+        "No Kad Pengenalan/Passport Wali",
+        "Pemberian Lain (Jika Ada)",
+    }
+    assert removed_columns.isdisjoint(XLSX_COLUMNS)
+    assert removed_columns.isdisjoint(PUBLIC_XLSX_COLUMNS)
+    assert removed_columns.isdisjoint(PUBLIC_CSV_COLUMNS)
+    assert removed_columns.isdisjoint(EXPORT_COLUMN_TO_FIELD)
 
 
 def test_exporter_can_show_public_columns_only(tmp_path: Path) -> None:

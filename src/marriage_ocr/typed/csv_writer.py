@@ -40,12 +40,8 @@ TYPED_CSV_COLUMNS = [
     "Pernikahan Kali",
     "Isteri Ke",
     "Belanja Hantaran",
-    "Pemberian Lain",
-    "IC Wali",
     "Umur Wali",
     "Alamat Wali",
-    "IC Saksi 1",
-    "IC Saksi 2",
     # Cerai/Rujuk typed-certificate fields -- see src/marriage_ocr/typed/template.py
     "Record Type",
     "IC Suami",
@@ -127,6 +123,23 @@ def _value_or_no_info(value: object | None, *, applies: bool) -> str:
     return _value(value)
 
 
+# Jumlah Bayaran / Tarikh Lahir Suami / Tarikh Lahir Isteri are real, populated
+# fields for typed Cerai and Rujuk (a Legacy-era registration fee; a birthdate
+# printed instead of an age) -- shared across all three typed record types in
+# this one row-builder and column list, so the field itself can't simply be
+# dropped without breaking Cerai/Rujuk. For Nikah specifically, per explicit
+# client request, these are pure clutter (Nikah's own age/fee concepts are
+# Umur Suami/Isteri and Mas Kahwin, already separate columns) -- this blanks
+# the cell for Nikah rows while leaving Cerai/Rujuk untouched. Nikah's own
+# ExtractedRecord.tarikh_lahir_suami/isteri stay populated internally (see
+# umur_ic_wali_applies above, which depends on them still being set) --
+# this only affects what reaches the exported cell, not the underlying field.
+def _value_unless_nikah(value: object | None, *, record_type: str) -> str:
+    if record_type == "NIKAH":
+        return ""
+    return _value(value)
+
+
 def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
     record = result.record
     # Umur Suami/Isteri/Wali and IC Wali only structurally exist on typed
@@ -171,18 +184,14 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Pernikahan Kali": _value(record.pernikahan_kali),
         "Isteri Ke": _value(record.isteri_ke),
         "Belanja Hantaran": _value(record.belanja_hantaran),
-        "Pemberian Lain": _value(record.pemberian_lain),
-        "IC Wali": _value_or_no_info(record.ic_wali, applies=umur_ic_wali_applies),
         "Umur Wali": _value_or_no_info(record.umur_wali, applies=umur_ic_wali_applies),
         "Alamat Wali": _value(record.alamat_wali),
-        "IC Saksi 1": _value(record.ic_saksi_1),
-        "IC Saksi 2": _value(record.ic_saksi_2),
         "IC Suami": _value(record.ic_suami),
         "IC Isteri": _value(record.ic_isteri),
         "Bangsa Suami": _value(record.bangsa_suami),
         "Bangsa Isteri": _value(record.bangsa_isteri),
-        "Tarikh Lahir Suami": _value(record.tarikh_lahir_suami),
-        "Tarikh Lahir Isteri": _value(record.tarikh_lahir_isteri),
+        "Tarikh Lahir Suami": _value_unless_nikah(record.tarikh_lahir_suami, record_type=record.record_type),
+        "Tarikh Lahir Isteri": _value_unless_nikah(record.tarikh_lahir_isteri, record_type=record.record_type),
         "Warganegara Suami": _value(record.warganegara_suami),
         "Warganegara Isteri": _value(record.warganegara_isteri),
         "Alamat Suami": _value(record.alamat_suami),
@@ -219,7 +228,7 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Bil Cerai": _value(record.bil_cerai),
         "Rujuk Kali": _value(record.rujuk_kali),
         "Jawatan Pendaftar": _value(record.jawatan_pendaftar),
-        "Jumlah Bayaran": _value(record.jumlah_bayaran),
+        "Jumlah Bayaran": _value_unless_nikah(record.jumlah_bayaran, record_type=record.record_type),
         "Hal Hal Lain": _value(record.hal_hal_lain),
         "Source File": result.source_file,
         "Processing Status": result.processing_status.value,

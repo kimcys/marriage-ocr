@@ -158,9 +158,69 @@ def test_skip_existing_only_skips_success_rows(tmp_path: Path) -> None:
     assert reloaded.should_skip("review.pdf") is False
 
 
-def test_blank_umur_and_ic_wali_show_tiada_maklumat_on_nikah_modern_rows(tmp_path: Path) -> None:
+def test_typed_csv_drops_nikah_only_duplicate_columns() -> None:
+    # Per explicit client request -- these were Nikah-only columns with no
+    # other use, cluttering the exported/displayed record with no distinct
+    # information (the underlying ic_wali/ic_saksi_1/ic_saksi_2/
+    # pemberian_lain ExtractedRecord fields are untouched).
+    removed_columns = {"IC Wali", "IC Saksi 1", "IC Saksi 2", "Pemberian Lain"}
+    assert removed_columns.isdisjoint(TYPED_CSV_COLUMNS)
+
+
+def test_typed_csv_blanks_shared_cerai_rujuk_fields_on_nikah_rows(tmp_path: Path) -> None:
+    # Jumlah Bayaran / Tarikh Lahir Suami / Tarikh Lahir Isteri are real,
+    # populated columns for typed Cerai/Rujuk (a Legacy-era registration fee;
+    # a birthdate printed instead of an age) -- shared in this one column
+    # list, so removing the column itself would break Cerai/Rujuk. Per
+    # explicit client request, Nikah rows specifically must never show a
+    # value in these cells even when the underlying field is populated
+    # (Nikah Legacy genuinely sets tarikh_lahir_suami/isteri internally, to
+    # decide whether Umur's own TIADA MAKLUMAT placeholder applies).
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(
+                bil="01/2009",
+                nama_suami="A, BIN B",
+                tarikh_lahir_suami="1980",
+                tarikh_lahir_isteri="1985",
+                jumlah_bayaran="RM 5",
+            ),
+            source_file="nikah_legacy.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(
+                record_type="CERAI",
+                bil="02/2009",
+                nama_suami="C, BIN D",
+                tarikh_lahir_suami="1980",
+                tarikh_lahir_isteri="1985",
+                jumlah_bayaran="RM 5",
+            ),
+            source_file="cerai.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        rows = {row["Source File"]: row for row in csv.DictReader(handle)}
+
+    assert rows["nikah_legacy.pdf"]["Tarikh Lahir Suami"] == ""
+    assert rows["nikah_legacy.pdf"]["Tarikh Lahir Isteri"] == ""
+    assert rows["nikah_legacy.pdf"]["Jumlah Bayaran"] == ""
+    assert rows["cerai.pdf"]["Tarikh Lahir Suami"] == "1980"
+    assert rows["cerai.pdf"]["Tarikh Lahir Isteri"] == "1985"
+    assert rows["cerai.pdf"]["Jumlah Bayaran"] == "RM 5"
+
+
+def test_blank_umur_shows_tiada_maklumat_on_nikah_modern_rows(tmp_path: Path) -> None:
     # Real client samples print "T. MAKLUMAT" (Tiada Maklumat / "no
-    # information") directly on the form for a wali whose age/IC genuinely
+    # information") directly on the form for a wali whose age genuinely
     # wasn't recorded -- a blank CSV cell there reads as "not extracted"
     # rather than "the form itself says there's no information", so this
     # placeholder is shown instead per explicit client request.
@@ -181,12 +241,11 @@ def test_blank_umur_and_ic_wali_show_tiada_maklumat_on_nikah_modern_rows(tmp_pat
     assert row["Umur Suami"] == "TIADA MAKLUMAT"
     assert row["Umur Isteri"] == "TIADA MAKLUMAT"
     assert row["Umur Wali"] == "TIADA MAKLUMAT"
-    assert row["IC Wali"] == "TIADA MAKLUMAT"
 
 
-def test_blank_umur_and_ic_wali_stay_empty_on_nikah_legacy_rows(tmp_path: Path) -> None:
-    # Nikah Legacy prints a birthdate instead of an age and has no Umur/IC
-    # Wali region at all -- these fields stay blank there because the
+def test_blank_umur_stays_empty_on_nikah_legacy_rows(tmp_path: Path) -> None:
+    # Nikah Legacy prints a birthdate instead of an age and has no Umur
+    # region at all -- these fields stay blank there because the
     # concept doesn't apply to that layout, not because the form said so,
     # so the Modern-only placeholder above must not appear. tarikh_lahir_
     # suami/isteri only ever get a value on the legacy path. A companion
@@ -220,10 +279,9 @@ def test_blank_umur_and_ic_wali_stay_empty_on_nikah_legacy_rows(tmp_path: Path) 
     assert rows["legacy.pdf"]["Umur Suami"] == ""
     assert rows["legacy.pdf"]["Umur Isteri"] == ""
     assert rows["legacy.pdf"]["Umur Wali"] == ""
-    assert rows["legacy.pdf"]["IC Wali"] == ""
 
 
-def test_blank_umur_and_ic_wali_stay_empty_on_cerai_rows(tmp_path: Path) -> None:
+def test_blank_umur_stays_empty_on_cerai_rows(tmp_path: Path) -> None:
     # Cerai has no Wali field at all -- these columns stay blank there
     # because the concept doesn't apply, not because the form said so. A
     # companion Nikah row keeps these columns from being pruned as unused.
@@ -245,5 +303,4 @@ def test_blank_umur_and_ic_wali_stay_empty_on_cerai_rows(tmp_path: Path) -> None
     assert rows["cerai.pdf"]["Umur Suami"] == ""
     assert rows["cerai.pdf"]["Umur Isteri"] == ""
     assert rows["cerai.pdf"]["Umur Wali"] == ""
-    assert rows["cerai.pdf"]["IC Wali"] == ""
 
