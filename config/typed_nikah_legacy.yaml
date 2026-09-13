@@ -13,7 +13,13 @@ typed:
   render_workers: 4
   vision_request_workers: 1
   word_confidence_threshold: 0.75
-  region_boundary_tolerance: 0.01
+  # Tighter than the 0.01 default: this legacy form's rows sit close enough
+  # together (~0.02-0.03 apart) that the default tolerance bled adjacent
+  # rows into each other -- confirmed via region-overlay debug output on
+  # bil, tarikh_daftar, alamat_suami, alamat_isteri, and alamat_wali, each
+  # of which pulled in the next field's label/value. Same fix already
+  # applied to typed_nikah_modern.yaml for the same reason.
+  region_boundary_tolerance: 0.004
 
   retry:
     api_attempts: 3

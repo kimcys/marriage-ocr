@@ -57,17 +57,22 @@ BORANG_4B_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
 # borang_4b) -- new documents should route to nikah_legacy/nikah_modern
 # below via triage.py instead.
 #
-# Coordinates below are first-pass measurements from one representative
-# sample per layout (word-position extraction cross-checked against a
-# rendered page image, not guessed) -- same calibration confidence level as
-# every other template in this file. NIKAH_MODERN_REGIONS (input/nikah -
-# typed/014970379082009.pdf, a clean well-aligned scan with a mostly-legible
-# text layer) is higher-confidence than NIKAH_LEGACY_REGIONS (input/nikah -
-# typed/01490612085274082005.pdf, whose embedded text layer is badly
-# garbled character-by-character even though the page image itself is
-# crisp -- label positions were still usable, but exact value boundaries
-# are a first-pass estimate). Verify against page_N_regions.png debug
-# output before trusting either at volume, especially the legacy one.
+# Coordinates below are ground-truth word positions read directly from a
+# real Vision full_page_vision.json debug capture for one representative
+# sample per layout (input/nikah - typed/014970379082009.pdf for modern,
+# input/nikah - typed/01490612085274082005.pdf for legacy) -- NOT the PDF's
+# own embedded text layer. That layer is badly garbled character-by-
+# character on the legacy sample even though the page image itself is
+# crisp, and its reported word positions don't reliably match what Vision
+# actually detects on the rendered image -- an earlier pass at
+# NIKAH_LEGACY_REGIONS built from that embedded layer produced a
+# deterministic ~0.013 dy transform drift (confirmed by rerunning twice and
+# getting the identical drift both times -- not OCR run-to-run variance),
+# enough to shift every field into its neighbor's territory on this
+# densely-packed form (~0.02 between rows). Every legacy coordinate below
+# was re-measured from real per-word Vision output instead. Still
+# first-pass in the sense that only one sample per layout was used -- verify
+# against page_N_regions.png debug output before trusting either at volume.
 #
 # NIKAH_LEGACY (Borang 3A) is a real 2-page PDF, but every field this
 # template extracts lives on page 1 -- page 2 of every legacy sample is a
@@ -80,35 +85,49 @@ BORANG_4B_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
 # actual page-count mismatch).
 NIKAH_LEGACY_REGIONS: dict[str, tuple[int, Region]] = {
     "no_siri": (1, Region(0.78, 0.246, 0.95, 0.283)),
-    "bil": (1, Region(0.40, 0.304, 0.92, 0.327)),
-    "tarikh_nikah": (1, Region(0.35, 0.360, 0.65, 0.386)),
-    "tarikh_daftar": (1, Region(0.35, 0.390, 0.65, 0.430)),
-    "nama_suami": (1, Region(0.32, 0.415, 0.92, 0.436)),
-    "id_suami": (1, Region(0.30, 0.441, 0.55, 0.463)),
-    "tarikh_lahir_suami": (1, Region(0.68, 0.441, 0.88, 0.463)),
-    "alamat_suami": (1, Region(0.28, 0.464, 0.92, 0.487)),
-    "nama_isteri": (1, Region(0.30, 0.484, 0.92, 0.506)),
-    "id_isteri": (1, Region(0.30, 0.505, 0.55, 0.528)),
-    "tarikh_lahir_isteri": (1, Region(0.68, 0.505, 0.88, 0.528)),
-    "alamat_isteri": (1, Region(0.28, 0.529, 0.92, 0.552)),
-    "nama_wali": (1, Region(0.30, 0.545, 0.92, 0.567)),
-    "id_wali": (1, Region(0.30, 0.563, 0.55, 0.586)),
-    "alamat_wali": (1, Region(0.28, 0.580, 0.92, 0.603)),
-    "hubungan_wali": (1, Region(0.30, 0.608, 0.55, 0.630)),
-    "saksi_1": (1, Region(0.29, 0.652, 0.92, 0.672)),
-    "id_saksi_1": (1, Region(0.30, 0.677, 0.55, 0.700)),
-    "saksi_2": (1, Region(0.29, 0.722, 0.92, 0.742)),
-    "id_saksi_2": (1, Region(0.30, 0.741, 0.55, 0.764)),
-    "mas_kahwin": (1, Region(0.38, 0.780, 0.60, 0.803)),
-    "belanja_hantaran": (1, Region(0.42, 0.800, 0.62, 0.823)),
-    "pemberian_lain": (1, Region(0.48, 0.865, 0.68, 0.888)),
+    "bil": (1, Region(0.40, 0.312, 0.49, 0.328)),
+    "tarikh_nikah": (1, Region(0.44, 0.362, 0.60, 0.376)),
+    "tarikh_daftar": (1, Region(0.44, 0.403, 0.55, 0.416)),
+    "nama_suami": (1, Region(0.33, 0.418, 0.60, 0.432)),
+    "id_suami": (1, Region(0.40, 0.441, 0.53, 0.454)),
+    "tarikh_lahir_suami": (1, Region(0.74, 0.442, 0.84, 0.455)),
+    "alamat_suami": (1, Region(0.28, 0.464, 0.65, 0.478)),
+    "nama_isteri": (1, Region(0.33, 0.483, 0.60, 0.497)),
+    "id_isteri": (1, Region(0.40, 0.504, 0.53, 0.518)),
+    "tarikh_lahir_isteri": (1, Region(0.74, 0.505, 0.84, 0.518)),
+    "alamat_isteri": (1, Region(0.28, 0.525, 0.65, 0.539)),
+    "nama_wali": (1, Region(0.33, 0.547, 0.60, 0.560)),
+    "id_wali": (1, Region(0.40, 0.569, 0.55, 0.582)),
+    "alamat_wali": (1, Region(0.28, 0.589, 0.60, 0.603)),
+    "hubungan_wali": (1, Region(0.33, 0.609, 0.45, 0.623)),
+    "saksi_1": (1, Region(0.28, 0.656, 0.60, 0.669)),
+    "id_saksi_1": (1, Region(0.44, 0.679, 0.58, 0.691)),
+    "saksi_2": (1, Region(0.28, 0.720, 0.60, 0.733)),
+    "id_saksi_2": (1, Region(0.44, 0.741, 0.58, 0.754)),
+    "mas_kahwin": (1, Region(0.38, 0.780, 0.48, 0.794)),
+    "belanja_hantaran": (1, Region(0.42, 0.802, 0.52, 0.815)),
+    # x2 kept short of ~0.69 -- a circular registrar stamp overlaps this row
+    # further right on the real sample and its text ("...PERCERAIAN...")
+    # would otherwise bleed in.
+    "pemberian_lain": (1, Region(0.49, 0.867, 0.62, 0.880)),
     "jumlah_bayaran": (1, Region(0.25, 0.916, 0.55, 0.941)),
 }
 
 NIKAH_LEGACY_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
     1: {
-        "SURAT PERAKUAN NIKAH": (0.4077, 0.2467),
-        "NAMA WALI": (0.1810, 0.5463),
+        # Coordinates below are real Vision-detected word positions (from
+        # a debug full_page_vision.json capture), NOT the PDF's own
+        # embedded text layer -- that layer is badly garbled on this
+        # template's samples (see the module comment above) and its
+        # character-position data doesn't match what Vision actually
+        # detects on the rendered image. Using it directly here (an
+        # earlier mistake) produced a consistent ~0.013 downward dy drift
+        # on every run -- deterministic, not OCR run-to-run variance, and
+        # confirmed by rerunning twice and getting the identical drift both
+        # times. On this densely-packed form (~0.02 between rows) that was
+        # enough to shift every field into its neighbor's territory.
+        "SURAT PERAKUAN NIKAH": (0.4065, 0.2634),
+        "NAMA WALI": (0.2101, 0.5560),
     },
 }
 
