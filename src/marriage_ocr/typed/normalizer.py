@@ -129,6 +129,25 @@ _TRAILING_NOISE_PATTERN = re.compile(
 # is a form's underline rather than punctuation (unlike a single trailing
 # abbreviation dot, e.g. "P.P.T.", which this leaves alone).
 _TRAILING_SYMBOL_NOISE = re.compile(r"(?:[✓✗]+|[.\-–—_]{2,})\s*$")
+# A bare, dangling "No." (or "No") at the very end of a line, nothing after
+# it -- typed Nikah's own "No. Siri : ######" stamp repeats down the page's
+# right margin (see the module-level comments on NIKAH_MODERN_REGIONS'
+# no_siri/tarikh_daftar/alamat_wali entries), and a field's own right
+# boundary sometimes lands between "No." and its serial, leaving just this
+# fragment behind. Anchored at end-of-line so it never touches a real
+# in-progress house number like "NO. 19 , JLN ..." (there is always more
+# text after "No." there).
+_TRAILING_BARE_NO_PATTERN = re.compile(r"\(?\s*\bno\.?\s*$", re.IGNORECASE)
+# The "( KETUA PENDAFTAR )" registrar-stamp is a *bounded* parenthetical
+# (a title, "KETUA" plus exactly one more word) that can land mid-line,
+# not just at the end -- confirmed on a real modern sample where Vision
+# merged it onto the same reading-order line as alamat_wali's own real
+# second address line ("( KETUA PE JENIANG , KEDAH"). Unlike
+# _TRAILING_NOISE_PATTERN's keywords (real bleed of a whole neighbouring
+# field, safe to strip to end-of-line), stripping to end-of-line here would
+# also eat that real trailing content, so this only removes the bounded
+# "(KETUA <one word>)" span itself, truncated or not, wherever it sits.
+_KETUA_STAMP_PATTERN = re.compile(r"\(?\s*ketua\s+[a-z]+\.?\s*\)?\s*", re.IGNORECASE)
 _LOCATION_NOISE = (
     "DAERAH",
     "SELANGOR",
@@ -315,7 +334,9 @@ def _strip_label(value: str, field_key: str) -> str:
 
 def _strip_trailing_noise(value: str) -> str:
     value = _TRAILING_NOISE_PATTERN.sub("", value).strip()
-    return _TRAILING_SYMBOL_NOISE.sub("", value).strip()
+    value = _TRAILING_SYMBOL_NOISE.sub("", value).strip()
+    value = _TRAILING_BARE_NO_PATTERN.sub("", value).strip()
+    return _KETUA_STAMP_PATTERN.sub("", value).strip()
 
 
 def _score_line_for_field(line: str, field_key: str | None) -> tuple[int, int, int]:
