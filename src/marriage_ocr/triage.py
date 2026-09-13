@@ -51,6 +51,55 @@ _JAWI_UNICODE_RANGES: tuple[tuple[int, int], ...] = (
 # Jawi samples are available, same as the layout-ratio configs were tuned.
 DEFAULT_JAWI_PROPORTION_THRESHOLD = 0.85
 
+# Small edit-distance tolerance for a handwritten keyword match -- 1 for a
+# keyword of 6 letters or fewer, 2 for anything longer. Confirmed necessary
+# against a real 154-photo handwritten Nikah ledger batch where "PERKAHWINAN"
+# was misread as "PERKAHWAN"/"PERKAHNAN"/"PERKAHWNAN" (a dropped letter) or
+# "PERKAH NAN" (a stray inserted space) on roughly 1 in 4 pages -- an exact
+# substring check missed all of these even though the header was genuinely
+# present and legible to a human. Scaled by length (not a flat tolerance) so
+# a short keyword like "RUJUK" (5 letters) doesn't become so loose it starts
+# matching unrelated short words by coincidence.
+def _fuzzy_tolerance(keyword: str) -> int:
+    return 1 if len(keyword) <= 6 else 2
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if len(a) < len(b):
+        a, b = b, a
+    previous_row = list(range(len(b) + 1))
+    for i, char_a in enumerate(a, start=1):
+        current_row = [i]
+        for j, char_b in enumerate(b, start=1):
+            cost = 0 if char_a == char_b else 1
+            current_row.append(
+                min(
+                    previous_row[j] + 1,  # deletion
+                    current_row[j - 1] + 1,  # insertion
+                    previous_row[j - 1] + cost,  # substitution
+                )
+            )
+        previous_row = current_row
+    return previous_row[-1]
+
+
+def _fuzzy_keyword_in_region(keyword: str, region: str) -> bool:
+    """True if `keyword` appears verbatim in `region`, or any single
+    whitespace-separated word in `region` (or two adjacent words joined, to
+    tolerate a stray inserted space splitting the keyword in two) is within
+    _fuzzy_tolerance(keyword) edits of it."""
+    if keyword in region:
+        return True
+    max_distance = _fuzzy_tolerance(keyword)
+    words = region.split()
+    candidates = [*words, *(a + b for a, b in zip(words, words[1:]))]
+    return any(
+        abs(len(candidate) - len(keyword)) <= max_distance
+        and _levenshtein(keyword, candidate) <= max_distance
+        for candidate in candidates
+    )
+
+
 _HANDWRITTEN_HEADER_KEYWORDS: dict[str, str] = {
     "PERKAHWINAN": "nikah",
     # "PERCERA" (not the full word) deliberately -- confirmed against two
@@ -190,7 +239,7 @@ def _classify_headers(text: str) -> tuple[str, str | None, str | None, list[str]
             return "typed", record_type, layout_variant, []
 
     for keyword, record_type in _HANDWRITTEN_HEADER_KEYWORDS.items():
-        if keyword in header_region:
+        if _fuzzy_keyword_in_region(keyword, header_region):
             layout_variant = "modern" if any(k in upper_text for k in _MODERN_LAYOUT_KEYWORDS) else "legacy"
             return "handwritten", record_type, layout_variant, []
 

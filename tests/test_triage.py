@@ -102,6 +102,46 @@ def test_classify_headers_handles_book_spine_split_and_ocr_typo_variants():
     assert triage._classify_headers(ocr_typo)[:2] == ("handwritten", "cerai")
 
 
+def test_classify_headers_tolerates_a_dropped_letter_in_perkahwinan():
+    # Regression: a real 154-photo handwritten Nikah ledger batch had Vision
+    # misread "PERKAHWINAN" as each of these on different pages (varying
+    # photo quality/angle) -- an exact substring check missed all of them
+    # even though the header was genuinely present and legible to a human,
+    # sending roughly 1 in 4 pages of the batch to manual review.
+    for garbled in ("PERKAHWNAN", "PERKAHWAN", "PERKAHNAN"):
+        doc_type, record_type, layout_variant, _ = triage._classify_headers(
+            f"DAFTAR {garbled} ORANG ISLAM\nBIL\nNAMA SUAMI DAN ISTERI"
+        )
+        assert (doc_type, record_type, layout_variant) == ("handwritten", "nikah", "legacy"), garbled
+
+
+def test_classify_headers_tolerates_a_stray_space_splitting_perkahwinan():
+    # Regression: a real sample read "DAFTAR PERKAH NAN ORANG ISLAM" -- Vision
+    # inserted a space where a letter-drop left two short fragments; the
+    # fuzzy match must try adjacent word pairs joined, not just single words.
+    doc_type, record_type, layout_variant, _ = triage._classify_headers(
+        "DAFTAR PERKAH NAN ORANG ISLAM\nBIL\nNAMA SUAMI DAN ISTERI"
+    )
+    assert (doc_type, record_type, layout_variant) == ("handwritten", "nikah", "legacy")
+
+
+def test_classify_headers_fuzzy_match_does_not_over_match_unrelated_text():
+    # The tolerance must stay tight enough that ordinary row content (names,
+    # column headers) never accidentally reads as a title keyword.
+    doc_type, record_type, layout_variant, notes = triage._classify_headers(
+        "BIL\nNAMA SUAMI DAN ISTERI\n836/2007 MOHD JEFRI AZHAR BIN ARD\nNO: 179914"
+    )
+    assert doc_type == "unknown"
+    assert record_type is None
+    assert layout_variant is None
+    assert notes == ["no known header keyword matched"]
+
+    # A genuinely unrelated short word must not fuzzy-match the short
+    # "RUJUK" keyword just because it happens to be nearby in length.
+    doc_type, _, _, _ = triage._classify_headers("SEBUAH BUKU CATATAN LAMA")
+    assert doc_type == "unknown"
+
+
 def test_classify_headers_ignores_cross_reference_mentions_outside_title_region():
     # Regression: a real Cerai page's own row-level remarks read "RUJUK BUKU
     # DAFTAR" (a cross-reference note to a different book, not the page's
