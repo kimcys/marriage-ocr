@@ -36,8 +36,18 @@ _LEADING_LABELS = {
     # legacy samples, since "Perhubungan" has no word boundary before
     # "hubungan" for a plain "hubungan" pattern to match.
     "hubungan_wali": re.compile(r"^\s*(per)?(hubungan\s*:?\s*)", re.IGNORECASE),
-    "saksi_1": re.compile(r"^\s*(\(\s*i\s*\)\s*)?(nama\s*)?(saksi\s*1\s*:?\s*)", re.IGNORECASE),
-    "saksi_2": re.compile(r"^\s*(\(\s*ii\s*\)\s*)?(nama\s*)?(saksi\s*2\s*:?\s*)", re.IGNORECASE),
+    # (saksi\s*1)? optional, not required -- confirmed on real modern-nikah
+    # samples that the printed label for each witness's own row is a bare
+    # "Nama :", with "SAKSI PERTAMA"/"SAKSI KEDUA" only appearing once, as a
+    # separate section header above both witnesses' Nama/IC/Umur rows, never
+    # repeated per-field. Requiring "saksi 1"/"saksi 2" literally here meant
+    # this pattern never matched real "Nama : <name>" text at all, so the
+    # label was never stripped -- and since bare NAMA is also a generic
+    # _TRAILING_NOISE_PATTERN keyword (added to strip *bleed* of a
+    # neighbouring Nama row into other fields), that keyword then wiped the
+    # witness's own name out entirely on every single record.
+    "saksi_1": re.compile(r"^\s*(\(\s*i\s*\)\s*)?(nama\s*(saksi\s*1)?\s*:?\s*)", re.IGNORECASE),
+    "saksi_2": re.compile(r"^\s*(\(\s*ii\s*\)\s*)?(nama\s*(saksi\s*2)?\s*:?\s*)", re.IGNORECASE),
     "tarikh_nikah": re.compile(r"^\s*(tarikh\s*nikah\s*:?\s*)", re.IGNORECASE),
     # Both phrasings seen on real samples: "Tarikh Nikah Hijrah : ..." and
     # "Tarikh Nikah : Hijrah ...". Needs its own label (rather than falling
@@ -57,9 +67,20 @@ _LEADING_LABELS = {
     "bangsa_isteri": re.compile(r"^\s*(bangsa\s*:?\s*)", re.IGNORECASE),
     "warganegara_suami": re.compile(r"^\s*(warganegara\s*:?\s*)", re.IGNORECASE),
     "warganegara_isteri": re.compile(r"^\s*(warganegara\s*:?\s*)", re.IGNORECASE),
-    "alamat_suami": re.compile(r"^\s*(alamat\s*(rumah)?\s*:?\s*)", re.IGNORECASE),
-    "alamat_isteri": re.compile(r"^\s*(alamat\s*(rumah)?\s*:?\s*)", re.IGNORECASE),
-    "alamat_wali": re.compile(r"^\s*(alamat\s*(pejabat)?\s*:?\s*)", re.IGNORECASE),
+    # \(? -- a "(Ketua Pendaftar)" rubber stamp is printed overlapping the
+    # Isteri/Wali address rows on real client samples, and Vision sometimes
+    # reads its opening "(" as sitting BEFORE "Alamat" rather than after it
+    # ("( Alamat : ENDAFTAR ) LUBUK BAKAK ..."); without tolerating that
+    # leading "(" here, the label pattern never matched at all, so "Alamat"
+    # itself survived as unstripped text and then matched _TRAILING_NOISE_
+    # PATTERN's own bare ALAMAT keyword -- wiping the field's entire real
+    # value as if it were a bled-in neighbouring row. (alamat\s*){1,2} --
+    # Vision also sometimes doubles the label itself ("Alamat Alamat :"),
+    # which a single-occurrence match left a leftover "Alamat :" prefix
+    # that triggered that same self-erasure.
+    "alamat_suami": re.compile(r"^\s*\(?\s*(alamat\s*){1,2}(rumah)?\s*:?\s*", re.IGNORECASE),
+    "alamat_isteri": re.compile(r"^\s*\(?\s*(alamat\s*){1,2}(rumah)?\s*:?\s*", re.IGNORECASE),
+    "alamat_wali": re.compile(r"^\s*\(?\s*(alamat\s*){1,2}(pejabat)?\s*:?\s*", re.IGNORECASE),
     "tempat_nikah": re.compile(r"^\s*(tempat\s*:?\s*)", re.IGNORECASE),
     "pernikahan_kali": re.compile(r"^\s*(pernikahan\s*kali\s*:?\s*)", re.IGNORECASE),
     # (isteri\s*)? -- "Pernikahan Kali : ... Isteri ke : ..." is one printed
@@ -112,8 +133,13 @@ _TRAILING_NOISE_PATTERN = re.compile(
     # region bled in tempat_nikah's whole "Tempat : PEJABAT AGAMA ISLAM
     # DAERAH SABAK" row from directly below when the Hijri date itself was
     # blank, the same "next section's row survives when this one is blank"
-    # pattern already fixed for HARI below.
-    r"TARIKH\s*LAHIR|TARIKH\s*MASUK\s*ISLAM|TARIKH\s*NIKAH|TARIKH\s*DAFTAR|HARI|TEMPAT|"
+    # pattern already fixed for HARI below. (?!\s*\d) -- confirmed on a
+    # real Thai/Indonesian client address ("NO . 15 TEMPAT 2 , MUKIM
+    # TUJUNG") that "Tempat" is also a genuine Malay/Indonesian address
+    # word (a lot/block number), always followed there by a bare digit;
+    # the real bled-in "Tempat Nikah"/"Tempat :" label is never followed
+    # by one, so this excludes only that address usage.
+    r"TARIKH\s*LAHIR|TARIKH\s*MASUK\s*ISLAM|TARIKH\s*NIKAH|TARIKH\s*DAFTAR|HARI|TEMPAT(?!\s*\d)|"
     # ISTERI bare, not just "ISTERI KE" -- pernikahan_kali's own row can wrap
     # so only "Isteri" (no "ke") lands at its tail (confirmed on a real
     # sample); by the time isteri_ke's own leading-label pattern runs on its
@@ -123,7 +149,18 @@ _TRAILING_NOISE_PATTERN = re.compile(
     # above ("Mas" and "Kahwin ... RM80.00" landing on separate joined
     # lines on a real legacy sample), which let mas_kahwin's own value
     # survive unstripped and get mistaken for belanja_hantaran's.
-    r"PERNIKAHAN\s*KALI|ISTERI(?:\s*KE)?|(?:MAS\s*)?KAHWIN|BELANJA\s*HANTARAN|PEMBERIAN\s*LAIN|"
+    # MASA bare -- hari_nikah and masa_nikah were widened to share the full
+    # row width (see NIKAH_MODERN_REGIONS), so hari_nikah's own capture now
+    # routinely includes the "Masa : <time>" tail sitting right after the
+    # day name on the same printed line.
+    # (?!\s*KE\b) -- confirmed on a real client sample that isteri_ke's own
+    # value sometimes reads as the combined phrase "Pernikahan Kali Ke 3"
+    # rather than a bare ordinal word; without this exclusion, this keyword
+    # (meant to strip a bled-in "Pernikahan Kali" row from OTHER fields)
+    # wiped that entire line -- including the "Ke 3" that made it isteri_
+    # ke's own real content -- before the ordinal-word/digit selection
+    # logic in _select_best_line ever got a candidate to choose.
+    r"PERNIKAHAN\s*KALI(?!\s*KE\b)|ISTERI(?:\s*KE)?|(?:MAS\s*)?KAHWIN|MASA|BELANJA\s*HANTARAN|PEMBERIAN\s*LAIN|"
     r"JUMLAH\s*BAYARAN|TANDATANGAN"
     r")\b.*$",
     re.IGNORECASE,
@@ -158,7 +195,13 @@ _TRAILING_BARE_NO_PATTERN = re.compile(r"\(?\s*\bno\.?\s*:?\s*$", re.IGNORECASE)
 # \d{4,7} simply won't be there to complete the match. Not anchored to
 # end-of-line like the bare pattern above, since this bleed has shown up
 # mid-line too (a name followed by this fragment followed by more text).
-_STRAY_NO_SIRI_PATTERN = re.compile(r"\b(?:n[oac]\.?\s*s[a-z]{1,4}|no\.?)\s+\d{4,7}\b", re.IGNORECASE)
+# \s*:?\s* (not just \s+) -- confirmed on a real client sample where this
+# bled into nama_wali as "KAMSANI BIN SAMADI No. Sirt : 018973"; the stray
+# colon between the label and its serial broke the old whitespace-only
+# gap, leaving the trailing digits (and their -5 scoring penalty in
+# _score_line_for_field) in place to make the real name lose to unrelated
+# noise on another candidate line.
+_STRAY_NO_SIRI_PATTERN = re.compile(r"\b(?:n[oac]\.?\s*s[a-z]{1,4}|no\.?)\s*:?\s*\d{4,7}\b", re.IGNORECASE)
 # The "( KETUA PENDAFTAR )" registrar-stamp is a *bounded* parenthetical
 # (a title, "KETUA" plus exactly one more word) that can land mid-line,
 # not just at the end -- confirmed on a real modern sample where Vision
@@ -187,6 +230,61 @@ _KETUA_STAMP_PATTERN = re.compile(r"\(?\s*ketua\s+[a-z]+\.?\s*\)?\s*", re.IGNORE
 # (\b), which requires a non-letter immediately before "k" and so cannot
 # reach into "RIZAB".
 _TRAILING_BARE_KETUA_PATTERN = re.compile(r"(?:(?<![a-z])[a-z]ketua|\(\s*ketua|\bketua)\s*$", re.IGNORECASE)
+# The same "(Ketua Pendaftar)" stamp, but as a LEADING fragment on
+# alamat_isteri/alamat_suami/alamat_wali specifically -- confirmed across
+# roughly half of a real 20-document client batch, this stamp physically
+# overlaps the Isteri/Wali address rows (never Suami's), so it lands right
+# after (or, when it blocks the label match entirely, right before) the
+# printed "Alamat :" label, or as a leading fragment on a wrapped
+# continuation line. _KETUA_STAMP_PATTERN above requires the literal word
+# "ketua" and only strips a *bounded* one-word span, which real samples
+# defeated two ways: (1) the generic bare PENDAFTAR keyword in
+# _TRAILING_NOISE_PATTERN ran first and wiped everything from "PENDAFTAR"
+# to end-of-line -- including the real street address sitting right after
+# it on the same line ("Alamat KETUA PENDAFTAR PARIT 13 SUNGAI PANJANG ,"
+# -> only "45300 SUNGAI BESAR , SELANGOR" survived, the street silently
+# dropped); (2) the stamp's own OCR misreading rarely spells "ketua"
+# correctly at all (ETUA/TUA/TOA/NUA/CTUA/KETER/ETDA, missing the leading
+# K or whole syllables), which the literal-only pattern above doesn't
+# match, and the misspelled fragment then sat in front of the real address
+# untouched. This is the same underlying self-erasure bug already fixed
+# for no_siri/nama_pendaftar/saksi_1/saksi_2 (a keyword meant to strip a
+# whole bled-in NEIGHBOURING row instead nukes real content when the
+# field's OWN captured text happens to contain that keyword) -- applied
+# here in _strip_label, before _strip_trailing_noise's generic keyword
+# scan ever runs, so the real street/town text after the stamp fragment
+# is never in the blast radius. Scoped to only the three alamat fields
+# (never applied elsewhere) since "tua" is a real Malay word (as in
+# "Kampung Tua") that would be unsafe to strip generically -- restricting
+# the match to the leading position of an alamat field's own line, right
+# where this stamp is confirmed to sit, keeps that safe.
+_ADDRESS_STAMP_PREFIX = re.compile(
+    r"^[(:\s]*(?:"
+    # KETUA-variant token(s) followed by a recognised PENDAFTAR-variant --
+    # both parts confirmed present, safe to consume regardless of what
+    # follows (the real address text starts right after).
+    r"(?:(?:ketua|cktua|cketua|ctua|etua|etda|tua|toa|nua|keter|ketga|ket)\.?\s*){1,2}"
+    r"(?:pendaftar[a-z]*|pendaptari|pendaft|pendan|endaftar[a-z]*|p\s*aftary|dastari|datt)"
+    r"|"
+    # KETUA-variant token(s) with nothing else recognisable following --
+    # either nothing at all (a lone "NUA"/"TUA" stamp fragment bled in as
+    # its own whole line) or a postcode's digit run bled onto the same
+    # line ("KETUA 68100 BATU CAVES ..."), both unambiguous since a real
+    # trailing word would be letters, not end-of-line or a digit. Anything
+    # else (a real trailing WORD this doesn't recognise, e.g. "KETUA PE
+    # JENIANG , KEDAH", where "PE" is an abbreviation _KETUA_STAMP_PATTERN
+    # below already handles correctly) is deliberately left alone here --
+    # consuming just "KETUA " and stopping would strand "PE" unstripped,
+    # since that removes _KETUA_STAMP_PATTERN's own "ketua" anchor.
+    r"(?:(?:ketua|cktua|cketua|ctua|etua|etda|tua|toa|nua|keter|ketga|ket)\.?\s*){1,2}(?=\d|$)"
+    r"|"
+    # A PENDAFTAR-variant alone, with no KETUA-part in front -- Vision
+    # merged the two into one bled-in line elsewhere on some samples, so
+    # only the second half survives on THIS field's own line/continuation.
+    r"(?:pendaftar[a-z]*|pendaptari|pendaft|pendan|endaftar[a-z]*|p\s*aftary|dastari|datt)"
+    r")\s*\)?\s*",
+    re.IGNORECASE,
+)
 _LOCATION_NOISE = (
     "DAERAH",
     "SELANGOR",
@@ -206,6 +304,45 @@ _LOCATION_NOISE = (
     "HIJRAH",
     "MASIHI",
     "PENDAFTAR",
+    # Compass-direction words -- confirmed on a real client sample that a
+    # street name's own direction suffix ("PARIT 7 1/2 BARAT") bled into
+    # bangsa_isteri as its own stray line ("BARAT ,"), which then TIED the
+    # real "MELAYU" answer on word count (both one word, no digits) and won
+    # the tie-break on being the shorter string. These never appear as a
+    # real Bangsa/Warganegara value, only as address bleed.
+    "BARAT",
+    "TIMUR",
+    "UTARA",
+    "SELATAN",
+)
+# Closed set of real Bangsa/Warganegara values seen on real client
+# samples plus other common Malaysian ethnicities/nearby nationalities --
+# used only as a positive scoring bonus (see _score_line_for_field), so an
+# unlisted-but-genuine value simply doesn't get the bonus rather than being
+# rejected outright.
+_BANGSA_WARGANEGARA_VALUES = (
+    "MELAYU",
+    "CINA",
+    "INDIA",
+    "IBAN",
+    "KADAZAN",
+    "BAJAU",
+    "MELANAU",
+    "BIDAYUH",
+    "MURUT",
+    "JAWA",
+    "BUGIS",
+    "SIAM",
+    "THAI",
+    "ARAB",
+    "PAKISTAN",
+    "MYANMAR",
+    "FILIPINO",
+    "BANGLADESH",
+    "MALAYSIA",
+    "THAILAND",
+    "INDONESIA",
+    "SINGAPURA",
 )
 _NAME_HINTS = {
     "nama_suami": ("BIN", "BINTI", "HAJI", "HJ", "TUAN", "USTAZ"),
@@ -271,16 +408,33 @@ def normalize_age(raw: str | None, *, min_age: int, max_age: int) -> int | None:
     return None
 
 
+_DATE_CALENDAR_LABEL_PREFIX = re.compile(r"^\s*(masihi|hijrah)\s*:?\s*", re.IGNORECASE)
+
+
+def _strip_calendar_label(line: str) -> str:
+    # generate_date_candidates's own OCR-digit-confusion substitution (S->5,
+    # I->1, applied to the whole string before any date parsing) turns the
+    # printed label "Masihi" into garbage like "51 1" -- confirmed on a real
+    # client sample where this left "Masihi 28.04.2009" with 5 groups after
+    # splitting instead of 3, so no date candidate was ever generated at all
+    # despite a perfectly clean date being right there. This label routinely
+    # sits directly in front of the date it introduces (both Nikah and
+    # Cerai/Rujuk templates print "Masihi"/"Hijrah" before their respective
+    # calendar's date on the same line), so stripping it first is broadly
+    # useful, not just for this one field.
+    return _DATE_CALENDAR_LABEL_PREFIX.sub("", line)
+
+
 def normalize_date_preserving_style(raw: str | None) -> str | None:
     if raw is None:
         return None
 
     for line in (part.strip() for part in str(raw).splitlines() if part.strip()):
-        candidates = generate_date_candidates(line, field_name="date")
+        candidates = generate_date_candidates(_strip_calendar_label(line), field_name="date")
         if candidates:
             return candidates[0].value
 
-    candidates = generate_date_candidates(str(raw).strip(), field_name="date")
+    candidates = generate_date_candidates(_strip_calendar_label(str(raw).strip()), field_name="date")
     if candidates:
         return candidates[0].value
 
@@ -344,6 +498,21 @@ normalize_money = normalize_mas_kahwin
 
 
 _LEADING_SECTION_NUMBER = re.compile(r"^\s*\(?\s*\d{1,2}\s*[.)]\s*")
+# Typed Nikah modern's own page-section headers ("A. Maklumat Pasangan",
+# "B. Maklumat Wali", "C. Maklumat Saksi", "D. Butir - Butir Pernikahan" --
+# see NIKAH_MODERN_ANCHORS) -- confirmed on several real client samples
+# that widening tempat_nikah's region far enough to fix its own drift bug
+# (see NIKAH_MODERN_REGIONS) also reaches this anchor line, and unlike
+# normalize_plain_text's best-line selection, normalize_wrapped_field JOINS
+# every non-empty line rather than picking one, so this header survived
+# glued onto the front of the real address ("D. BUTIR - BUTIR PERNIKAHAN
+# PEJABAT AGAMA ISLAM DAERAH SABAK BERNAM , ..."). Never real content for
+# any field, so stripped unconditionally the same way _LEADING_SECTION_
+# NUMBER is above.
+_LEADING_PAGE_SECTION_HEADER = re.compile(
+    r"^\s*[a-d]\s*\.?\s*-?\s*(maklumat\s+pasangan|maklumat\s+wali|maklumat\s+saksi|butir\s*-?\s*butir\s+pernikahan)\s*",
+    re.IGNORECASE,
+)
 
 
 def _strip_label(value: str, field_key: str) -> str:
@@ -354,9 +523,25 @@ def _strip_label(value: str, field_key: str) -> str:
     # field's captured text; that prefix is never real content for any
     # field, so it comes off unconditionally rather than per-field.
     result = _LEADING_SECTION_NUMBER.sub("", value)
+    result = _LEADING_PAGE_SECTION_HEADER.sub("", result)
+    # A printed fill-in blank ("......... Bangsa : MELAYU") can sit BEFORE
+    # the field's own label, not just after it -- e.g. isteri's row prints
+    # a checkbox-style "*" placeholder ahead of "Umur", and once that's
+    # stripped by _strip_trailing_noise the next line starts with a run of
+    # dots before "Bangsa :". Every _LEADING_LABELS pattern anchors on
+    # `^\s*`, so leading dots/dashes/underscores block the label pattern
+    # from matching at all unless they're removed first.
+    result = re.sub(r"^[\s.\-_]+", "", result)
     pattern = _LEADING_LABELS.get(field_key)
     if pattern is not None:
         result = pattern.sub("", result, count=1)
+    if field_key in ("alamat_isteri", "alamat_suami", "alamat_wali"):
+        # See _ADDRESS_STAMP_PREFIX -- strips a leading "(Ketua Pendaftar)"
+        # stamp fragment (in whichever misspelling Vision produced) before
+        # _strip_trailing_noise's generic PENDAFTAR/ALAMAT keywords get a
+        # chance to run and wipe the real street text that follows it on
+        # the same line.
+        result = _ADDRESS_STAMP_PREFIX.sub("", result, count=1)
     # A leading colon only -- not every colon in the string. masa_nikah's
     # value can itself contain one ("9:30 PM"); a blanket replace used to
     # turn that into "9 30 PM" whenever the label pattern above left a
@@ -393,10 +578,30 @@ def _score_line_for_field(line: str, field_key: str | None) -> tuple[int, int, i
         score -= 5
     if any(marker in upper for marker in _LOCATION_NOISE):
         score -= 3
+    if any(marker in upper for marker in ("KAD", "PENGENALAN", "PASPORT")):
+        # A No. Kad Pengenalan/Pasport label fragment is never a legitimate
+        # value for any plain-text field -- confirmed on a real client
+        # sample where Vision doubled this label's own words ("No. No. Kad
+        # Kad Peng Pengenalan /"), which broke the exact-phrase
+        # _TRAILING_NOISE_PATTERN match this would normally get fully
+        # stripped by, leaving a 6-word garbage line that outscored the
+        # real one-word "MALAYSIA" answer for warganegara_isteri on pure
+        # word count. A strong fixed penalty (not proportional to how many
+        # of the three words matched) since the doubling's exact shape is
+        # unpredictable -- this only needs to reliably lose to a real
+        # short answer, not model the noise precisely.
+        score -= 8
     if field_key in _NAME_HINTS:
         score += sum(2 for hint in _NAME_HINTS[field_key] if hint in upper)
     if field_key == "hubungan_wali":
-        if any(token in upper for token in ("BAPA", "KANDUNG", "WALI", "HAKIM")):
+        # WALI deliberately excluded -- confirmed on a real client sample
+        # that this field's own region also bled in a "Wali : <name>"
+        # label fragment (a mis-split "Nama Wali :" row) sitting ahead of
+        # the real "Hubungan : BAPA KANDUNG" line; rewarding bare "WALI"
+        # let that noise line (short, but plus this bonus) outscore the
+        # real one. "WALI HAKIM" (a real relationship value) still scores
+        # fine on HAKIM alone, so this doesn't need WALI to be recognised.
+        if any(token in upper for token in ("BAPA", "KANDUNG", "HAKIM")):
             score += 4
     if field_key in ("pernikahan_kali", "isteri_ke"):
         # These fields' real value is always a short ordinal word -- without
@@ -417,6 +622,23 @@ def _score_line_for_field(line: str, field_key: str | None) -> tuple[int, int, i
             score += 3
         if any(char.isdigit() for char in line):
             score += 2
+    if field_key in ("bangsa_isteri", "bangsa_suami", "warganegara_isteri", "warganegara_suami"):
+        # A person's name is never a valid Bangsa/Warganegara value -- same
+        # bug already fixed for pernikahan_kali/isteri_ke above. Confirmed
+        # on two real client samples where a bled-in name fragment from the
+        # row above ("BIN ABDUL LATIF", "MOHD HATA") outscored the real
+        # one-word "MELAYU" answer on plain word count alone.
+        if any(hint in upper for hint in ("BIN", "BINTI", "HAJI", "HJ", "USTAZ", "TUAN")):
+            score -= 6
+        # A bare given-name fragment with none of the markers above (e.g.
+        # "MOHD HATA") still outscores a real one-word answer on plain word
+        # count -- confirmed on a real client sample. Rather than guess at
+        # every possible name shape, reward the actual closed set of
+        # Bangsa/Warganegara values seen on real samples from this form
+        # (both fields share this scorer, and "INDONESIA"/"THAI" are used
+        # as both a Warganegara AND a Bangsa answer on real samples here).
+        if any(token == upper for token in _BANGSA_WARGANEGARA_VALUES):
+            score += 6
     return (score, len(words), -len(line))
 
 
@@ -434,39 +656,64 @@ def _select_best_line(lines: list[str], field_key: str | None) -> str | None:
                 address_candidates.append(line)
         if address_candidates:
             candidates = address_candidates
-    elif field_key in ("no_siri", "pernikahan_kali", "isteri_ke"):
+    elif field_key in ("no_siri", "tarikh_nikah_hijri"):
         # no_siri is a bare serial number -- the opposite of every other
         # plain_text field here, which is text and wants the no-digit
         # branch below. Without this, a widened region that picks up a
         # neighbouring watermark/stamp misread (confirmed on a real legacy
         # sample: raw text "AARAT\nNo 092113") loses the real value, since
         # the default branch actively prefers the digit-free garbage line.
-        # pernikahan_kali/isteri_ke's real value is "PERTAMA ( 1 )" style --
-        # that parenthetical digit used to make the no-digit branch below
-        # throw away the correct line in favour of an unrelated digit-free
-        # neighbour (confirmed on a real sample: "* Tunai" outscored
-        # "PERTAMA ( 1 )" this way, before the ordinal-word bonus above
-        # even got a chance to run).
+        # tarikh_nikah_hijri's real value ("03 J'AWAL 1430" style) also has
+        # digits -- confirmed on a real client sample where a bled-in,
+        # digit-free "D. BUTIR - BUTIR PERNIKAHAN" section header outscored
+        # the field's own correct (digit-containing) value this same way.
         digit_candidates = [line for line in candidates if any(char.isdigit() for char in line)]
         if digit_candidates:
             candidates = digit_candidates
-        if field_key in ("pernikahan_kali", "isteri_ke"):
-            # A person's name is never a valid value here -- the -6 scoring
-            # penalty above only helps when there's a *better* candidate to
-            # prefer instead, but on a real client sample this field's only
-            # candidate at all was a bled-in "MOHD YUSOF BIN MOHD TAHIR"
-            # (the true value was genuinely blank on that document), so
-            # scoring alone still picked it: max() over one candidate
-            # returns that candidate regardless of its score. Drop any
-            # name-shaped, non-ordinal candidate outright, unless doing so
-            # would leave nothing at all to select from.
-            name_free = [
-                line
-                for line in candidates
-                if not any(hint in line.upper() for hint in ("BIN", "BINTI", "HAJI", "HJ", "USTAZ", "TUAN"))
-            ]
-            if name_free:
-                candidates = name_free
+    elif field_key in ("pernikahan_kali", "isteri_ke"):
+        # This field's real value is always one of a closed set of ordinal
+        # words -- prefer an ordinal-word candidate over everything else
+        # FIRST, rather than filtering by digit presence the way no_siri/
+        # tarikh_nikah_hijri do above (tried previously: confirmed on
+        # several real client samples that once these two fields' regions
+        # were widened enough to also pick up an address's own bled-in
+        # postcode, the digit-preferring filter picked that digit-bearing
+        # address line over the real, digit-free "PERTAMA" line outright --
+        # excluding it before the ordinal-word scoring bonus ever got a
+        # chance to run).
+        ordinal_candidates = [
+            line
+            for line in candidates
+            if any(token in line.upper() for token in ("PERTAMA", "KEDUA", "KETIGA", "KEEMPAT", "KELIMA"))
+        ]
+        if ordinal_candidates:
+            candidates = ordinal_candidates
+        else:
+            # No spelled-out ordinal word anywhere -- fall back to
+            # preferring a digit-bearing candidate the same way no_siri/
+            # tarikh_nikah_hijri do (a real value can still be a bare
+            # parenthetical digit once OCR drops the word itself, e.g.
+            # "( 1 )", which the default no-digit branch below would
+            # otherwise throw away in favour of an unrelated neighbour).
+            digit_candidates = [line for line in candidates if any(char.isdigit() for char in line)]
+            if digit_candidates:
+                candidates = digit_candidates
+        # A person's name is never a valid value here -- the -6 scoring
+        # penalty above only helps when there's a *better* candidate to
+        # prefer instead, but on a real client sample this field's only
+        # candidate at all was a bled-in "MOHD YUSOF BIN MOHD TAHIR" (the
+        # true value was genuinely blank on that document), so scoring
+        # alone still picked it: max() over one candidate returns that
+        # candidate regardless of its score. Drop any name-shaped,
+        # non-ordinal candidate outright, unless doing so would leave
+        # nothing at all to select from.
+        name_free = [
+            line
+            for line in candidates
+            if not any(hint in line.upper() for hint in ("BIN", "BINTI", "HAJI", "HJ", "USTAZ", "TUAN"))
+        ]
+        if name_free:
+            candidates = name_free
     else:
         no_digit = [line for line in candidates if not any(char.isdigit() for char in line)]
         if no_digit:
@@ -485,6 +732,15 @@ def normalize_plain_text(raw: str | None, *, field_key: str | None = None) -> st
         line = _strip_label(line, field_key)
         line = _strip_trailing_noise(line, field_key)
         line = re.sub(r"[ \t]+", " ", line).strip(" ,")
+        # A line can reduce to a bare placeholder mark once its own real
+        # content (e.g. "Umur : 64 Tahun") is stripped as bled-in noise from
+        # a neighbouring field -- confirmed on a real sample where a
+        # checkbox-style "*" preceded "Umur" on bangsa_isteri's own region,
+        # leaving a lone "*" that would otherwise outrank the real answer on
+        # the next line ("Bangsa : MELAYU") since _select_best_line has no
+        # other candidate to prefer over a short non-empty string.
+        if line and _PLACEHOLDER_LINE_PATTERN.match(line):
+            continue
         if line:
             cleaned_lines.append(line)
     value = _select_best_line(cleaned_lines, field_key)
@@ -510,7 +766,11 @@ def normalize_name(raw: str | None, *, field_key: str | None = None) -> str | No
     return normalize_plain_text(raw, field_key=field_key)
 
 
-_PLACEHOLDER_LINE_PATTERN = re.compile(r"^[.\-_:\s]*$")
+# Includes "*" -- typed Nikah modern's printed form uses a bare asterisk as
+# a checkbox/reference mark ahead of some rows (e.g. before "Umur"); once
+# that row's real content is stripped as bled-in noise, the lone "*" left
+# behind is placeholder junk, not a candidate value.
+_PLACEHOLDER_LINE_PATTERN = re.compile(r"^[.\-_:\s*]*$")
 
 
 def normalize_remarks(raw: str | None) -> str | None:

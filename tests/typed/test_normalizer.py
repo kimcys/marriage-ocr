@@ -383,3 +383,143 @@ def test_stray_no_siri_pattern_does_not_eat_real_names_or_house_numbers() -> Non
     # number is 1-3 digits -- both must survive untouched.
     assert normalize_plain_text("AHMAD NASIR BIN ALI", field_key="nama_suami") == "AHMAD NASIR BIN ALI"
     assert normalize_plain_text("MOHD NOOR BIN ISMAIL", field_key="nama_suami") == "MOHD NOOR BIN ISMAIL"
+
+
+def test_bangsa_isteri_drops_a_leading_checkbox_mark_and_dotted_fill_in() -> None:
+    # Regression: a real client sample's bangsa_isteri region captured "*
+    # Umur : 64 Tahun" (a checkbox mark ahead of the bled-in Umur row) as
+    # its first line and "......... Bangsa : MELAYU" as its second -- the
+    # bare "*" that survived Umur's own strip used to win selection outright
+    # since normalize_plain_text never filtered placeholder-only lines, and
+    # separately the leading dots blocked bangsa_isteri's own label pattern
+    # from matching "Bangsa :" underneath them.
+    assert (
+        normalize_plain_text("* Umur : 64 Tahun\n......... Bangsa : MELAYU", field_key="bangsa_isteri")
+        == "MELAYU"
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "field_key", "expected"),
+    [
+        # A directional address suffix bled in as bangsa_isteri's own
+        # second candidate line and tied "MELAYU" on word count, winning
+        # the tie-break by being the shorter string.
+        ("410512-10-5116 Umur : 68\nBangsa : MELAYU\nBARAT ,", "bangsa_isteri", "MELAYU"),
+        # A bled-in name fragment with a BIN/BINTI/HAJI-style marker.
+        ("BIN ABDUL LATIF\nUmur : 60 Tahun\nBangsa : ............. MELAYU", "bangsa_suami", "MELAYU"),
+        # A bled-in given-name fragment with NO recognisable marker at all
+        # -- only a closed-set allow-list bonus for real Bangsa/Warganegara
+        # values can outscore this, since word count alone favours it.
+        ("MOHD HATA\nUmur : 27 Tahun\nBangsa : MELAYU", "bangsa_suami", "MELAYU"),
+    ],
+)
+def test_bangsa_is_not_outscored_by_a_bled_in_name_fragment(raw: str, field_key: str, expected: str) -> None:
+    assert normalize_plain_text(raw, field_key=field_key) == expected
+
+
+def test_hubungan_wali_is_not_outscored_by_a_bled_in_wali_name_label() -> None:
+    # Regression: a real client sample's hubungan_wali region captured a
+    # mis-split "Nama Wali :" row ("Wali : KAMSANI BIN SAMADI") ahead of the
+    # real "Hubungan : BAPA KANDUNG" line -- the bare "WALI" scoring bonus
+    # (meant to help recognise "WALI HAKIM") rewarded that noise line too,
+    # letting it outscore the real answer.
+    raw = (
+        "Wali : KAMSANI BIN SAMADI\n"
+        "No. Kad Pengenalan / Pasport : TIADA MAKLUMAT\n"
+        "Hubungan : BAPA KANDUNG\n"
+        "( Alamat : ENDAFTAR ) LUBUK BAKAK D5 PADANG CERMIN"
+    )
+    assert normalize_plain_text(raw, field_key="hubungan_wali") == "BAPA KANDUNG"
+
+
+def test_nama_wali_survives_a_no_siri_bleed_with_a_colon_before_the_serial() -> None:
+    # Regression: on a real client sample "No. Sirt : 018973" (a colon
+    # between the label and its serial) bled onto the same line as the real
+    # name; _STRAY_NO_SIRI_PATTERN required whitespace only there, so the
+    # trailing digits survived and their -5 digit penalty let an unrelated
+    # bled-in noise line ("B. MAKLUMAT WALI") win selection instead.
+    raw = "B. MAKLUMAT WALI\nNama Wali : KAMSANI BIN SAMADI No. Sirt : 018973"
+    assert normalize_plain_text(raw, field_key="nama_wali") == "KAMSANI BIN SAMADI"
+
+
+def test_isteri_ke_survives_its_own_combined_pernikahan_kali_phrasing() -> None:
+    # Regression: on two real client samples, isteri_ke's own printed value
+    # read as the combined phrase "Pernikahan Kali Ke 3"/"Ke 2" rather than
+    # a bare ordinal word. The generic PERNIKAHAN KALI bleed-strip keyword
+    # (meant to remove a neighbouring field's whole row) matched this
+    # field's own value and wiped it to nothing.
+    raw = "SUNGAI BESAR , SELANGOR\nMOHD YUSOF BIN MOHD TAHIR\nIsteri ke : PERNIKAHAN KALI KE 3"
+    assert normalize_plain_text(raw, field_key="isteri_ke") == "PERNIKAHAN KALI KE 3"
+
+
+def test_isteri_ke_still_prefers_a_real_ordinal_word_over_bled_in_address_digits() -> None:
+    # Regression: widening isteri_ke's region to fix a vertical drift bug
+    # also let an address's own postcode digits into its candidate pool;
+    # the old digit-preferring branch (shared with no_siri/tarikh_nikah_
+    # hijri) then excluded the real, digit-free "PERTAMA" line outright.
+    raw = ": Masa : 5.00 PTG\nDAERAH SABAK BERNAM , 45300 SUNGAI BESAR , SELANGOR\nHAJI IDRIS BIN HAJI RAMLI , P.P.T.\nIsteri ke : PERTAMA"
+    assert normalize_plain_text(raw, field_key="isteri_ke") == "PERTAMA"
+
+
+def test_tempat_nikah_drops_a_bled_in_page_section_header() -> None:
+    # Regression: widening tempat_nikah's region to fix a vertical drift bug
+    # also reached this page's own "D. Butir - Butir Pernikahan" section
+    # anchor line; unlike normalize_plain_text's best-line selection,
+    # normalize_wrapped_field joins every non-empty line, so this header
+    # survived glued onto the front of the real address.
+    raw = (
+        "D. BUTIR - BUTIR PERNIKAHAN\n"
+        "Tarikh Nikah : Hijrah : 03 J ' AWAL 1430 Hari : SABTU Masa : 5.00 PTG\n"
+        "Masihi 28.04.2009\n"
+        "Tempat : PEJABAT AGAMA ISLAM DAERAH SABAK BERNAM , 45300 SUNGAI BESAR , SELANGOR"
+    )
+    assert (
+        normalize_wrapped_field(raw, field_key="tempat_nikah")
+        == "PEJABAT AGAMA ISLAM DAERAH SABAK BERNAM , 45300 SUNGAI BESAR , SELANGOR"
+    )
+
+
+def test_alamat_isteri_recovers_a_street_hidden_behind_a_ketua_pendaftar_stamp() -> None:
+    # Regression: a "(Ketua Pendaftar)" rubber stamp physically overlaps the
+    # Isteri/Wali address rows on real client samples. The generic bare
+    # PENDAFTAR bleed-strip keyword matched the stamp fragment and wiped
+    # everything after it on the same line -- including the real street
+    # text sitting right after the stamp, not just the stamp itself.
+    assert (
+        normalize_wrapped_field(
+            "Alamat KETUA PENDAFTAR PARIT 13 SUNGAI PANJANG ,\n45300 SUNGAI BESAR , SELANGOR",
+            field_key="alamat_isteri",
+        )
+        == "PARIT 13 SUNGAI PANJANG 45300 SUNGAI BESAR , SELANGOR"
+    )
+
+
+def test_alamat_isteri_recovers_a_street_behind_a_doubled_ketua_stamp_misread() -> None:
+    # Regression: on a real sample the stamp's own OCR misreading doubled
+    # ("Alamat Alamat : KETUA CTUA PENDAFTAR ..."), which a single-pass
+    # label strip and a single KETUA-variant match both failed to fully
+    # consume, leaving the field's own generic ALAMAT/PENDAFTAR keywords to
+    # wipe the whole line as if it were entirely bled-in noise.
+    assert (
+        normalize_wrapped_field(
+            "Alamat Alamat : KETUA CTUA PENDAFTAR PARIT 7 BARAT ,\n45300 SUNGAI BESAR , SELANGOR",
+            field_key="alamat_isteri",
+        )
+        == "PARIT 7 BARAT 45300 SUNGAI BESAR , SELANGOR"
+    )
+
+
+def test_alamat_wali_recovers_a_street_when_the_stamp_blocks_its_own_label() -> None:
+    # Regression: the stamp's leading "(" sometimes lands ahead of "Alamat"
+    # itself ("( Alamat : ENDAFTAR ) LUBUK BAKAK ..."), which used to block
+    # alamat_wali's own leading-label pattern from matching at all -- the
+    # unstripped "Alamat" then matched the generic bare ALAMAT bleed-strip
+    # keyword and wiped the field's entire real value.
+    assert (
+        normalize_wrapped_field(
+            "( Alamat : ENDAFTAR ) LUBUK BAKAK D5 PADANG CERMIN ,\nLAMPUNG SELATAN , BANDAR LAMPUNG , INDONESIA .",
+            field_key="alamat_wali",
+        )
+        == "LUBUK BAKAK D5 PADANG CERMIN LAMPUNG SELATAN , BANDAR LAMPUNG , INDONESIA ."
+    )

@@ -157,3 +157,93 @@ def test_skip_existing_only_skips_success_rows(tmp_path: Path) -> None:
     assert reloaded.should_skip("success.pdf") is True
     assert reloaded.should_skip("review.pdf") is False
 
+
+def test_blank_umur_and_ic_wali_show_tiada_maklumat_on_nikah_modern_rows(tmp_path: Path) -> None:
+    # Real client samples print "T. MAKLUMAT" (Tiada Maklumat / "no
+    # information") directly on the form for a wali whose age/IC genuinely
+    # wasn't recorded -- a blank CSV cell there reads as "not extracted"
+    # rather than "the form itself says there's no information", so this
+    # placeholder is shown instead per explicit client request.
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(bil="01/2009", nama_suami="A, BIN B"),
+            source_file="modern.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["Umur Suami"] == "TIADA MAKLUMAT"
+    assert row["Umur Isteri"] == "TIADA MAKLUMAT"
+    assert row["Umur Wali"] == "TIADA MAKLUMAT"
+    assert row["IC Wali"] == "TIADA MAKLUMAT"
+
+
+def test_blank_umur_and_ic_wali_stay_empty_on_nikah_legacy_rows(tmp_path: Path) -> None:
+    # Nikah Legacy prints a birthdate instead of an age and has no Umur/IC
+    # Wali region at all -- these fields stay blank there because the
+    # concept doesn't apply to that layout, not because the form said so,
+    # so the Modern-only placeholder above must not appear. tarikh_lahir_
+    # suami/isteri only ever get a value on the legacy path. A companion
+    # Modern row keeps these columns from being pruned as entirely unused.
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(
+                bil="01/2009",
+                nama_suami="A, BIN B",
+                tarikh_lahir_suami="1980",
+                tarikh_lahir_isteri="1985",
+            ),
+            source_file="legacy.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(bil="02/2009", nama_suami="C, BIN D", umur_suami=30),
+            source_file="modern.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        rows = {row["Source File"]: row for row in csv.DictReader(handle)}
+
+    assert rows["legacy.pdf"]["Umur Suami"] == ""
+    assert rows["legacy.pdf"]["Umur Isteri"] == ""
+    assert rows["legacy.pdf"]["Umur Wali"] == ""
+    assert rows["legacy.pdf"]["IC Wali"] == ""
+
+
+def test_blank_umur_and_ic_wali_stay_empty_on_cerai_rows(tmp_path: Path) -> None:
+    # Cerai has no Wali field at all -- these columns stay blank there
+    # because the concept doesn't apply, not because the form said so. A
+    # companion Nikah row keeps these columns from being pruned as unused.
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    store.upsert(_cerai_result("cerai.pdf", "740326145837", ProcessingStatus.SUCCESS))
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(bil="02/2009", nama_suami="C, BIN D", umur_suami=30),
+            source_file="modern.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        rows = {row["Source File"]: row for row in csv.DictReader(handle)}
+
+    assert rows["cerai.pdf"]["Umur Suami"] == ""
+    assert rows["cerai.pdf"]["Umur Isteri"] == ""
+    assert rows["cerai.pdf"]["Umur Wali"] == ""
+    assert rows["cerai.pdf"]["IC Wali"] == ""
+

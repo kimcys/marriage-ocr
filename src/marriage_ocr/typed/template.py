@@ -215,13 +215,48 @@ NIKAH_MODERN_REGIONS: dict[str, tuple[int, Region]] = {
     "id_saksi_2": (2, Region(0.13, 0.258, 0.90, 0.290)),
     "tarikh_nikah_hijri": (2, Region(0.13, 0.363, 0.60, 0.399)),
     "tarikh_nikah": (2, Region(0.13, 0.379, 0.55, 0.409)),
-    "hari_nikah": (2, Region(0.45, 0.363, 0.65, 0.399)),
-    "masa_nikah": (2, Region(0.62, 0.363, 0.90, 0.399)),
-    "tempat_nikah": (2, Region(0.13, 0.400, 0.90, 0.438)),
-    "nama_pendaftar": (2, Region(0.13, 0.420, 0.90, 0.459)),
-    "pernikahan_kali": (2, Region(0.13, 0.441, 0.50, 0.479)),
-    "isteri_ke": (2, Region(0.45, 0.441, 0.75, 0.479)),
-    "mas_kahwin": (2, Region(0.13, 0.462, 0.70, 0.502)),
+    # Widened to the full row width, same reasoning as tarikh_nikah_hijri
+    # above: this row's three sub-fields (Hijri date, Hari, Masa) share one
+    # printed line whose split points shift with each value's own length --
+    # confirmed on a real client sample where a longer Hijri date pushed
+    # "Hari : SABTU" far enough right that the old x2=0.65 boundary cut
+    # "SABTU" off entirely (its word-centre landed at template x~0.663,
+    # past the boundary), while masa_nikah's x1=0.62 comfortably swallowed
+    # it instead -- each field's own non-greedy "hari"/"masa" leading-label
+    # pattern (plus the MASA trailing-noise keyword below) correctly
+    # isolates its own value even when both regions capture the same wide
+    # text.
+    "hari_nikah": (2, Region(0.13, 0.363, 0.90, 0.399)),
+    "masa_nikah": (2, Region(0.13, 0.363, 0.90, 0.399)),
+    # y1/y2 both widened well past this row's own old bounds (previously a
+    # ~0.02-0.04 overlap into each neighbour) -- confirmed on several real
+    # client samples that this whole "D. Butir-Butir Pernikahan" block
+    # drifts UP the page by roughly one to two row-heights relative to the
+    # calibration sample (cause not fully isolated: likely page-to-page
+    # variance this template's single global per-page transform doesn't
+    # correct for within a section). tempat_nikah's own region ended up
+    # capturing nama_pendaftar's real row instead (missing the real
+    # "Tempat :" line entirely, i.e. blank/wrong Tempat Nikah), and
+    # nama_pendaftar's captured pernikahan_kali/mas_kahwin's row instead
+    # (blank Nama Pendaftar, or -- on less-drifted samples -- a real
+    # address bleeding in from tempat_nikah's own line: "Nama Pendaftar
+    # contains address"). Each field's own leading-label pattern in
+    # normalizer.py (`_LEADING_LABELS`) reliably isolates its own line even
+    # from this much wider, heavily overlapping candidate pool, the same
+    # tolerant-region-plus-label-matching approach already used for hari_
+    # nikah/masa_nikah above.
+    "tempat_nikah": (2, Region(0.13, 0.363, 0.90, 0.459)),
+    "nama_pendaftar": (2, Region(0.13, 0.363, 0.90, 0.479)),
+    # pernikahan_kali/isteri_ke: same drift, confirmed up to two full rows
+    # on some samples -- isteri_ke's raw capture came back completely empty
+    # (its narrow x1=0.45-0.75 window landed in blank space between rows),
+    # and on others it captured only the bare "Isteri ke :" label with the
+    # real ordinal value pushed out past the old x2=0.75 (the same
+    # variable-preceding-text column push already fixed for hari_nikah/
+    # masa_nikah) -- x2 widened to 0.90 for the same reason.
+    "pernikahan_kali": (2, Region(0.13, 0.400, 0.50, 0.502)),
+    "isteri_ke": (2, Region(0.45, 0.400, 0.90, 0.502)),
+    "mas_kahwin": (2, Region(0.13, 0.420, 0.70, 0.520)),
     # x1 shifted right of "Belanja Hantaran:"/"Pemberian Lain (Jika Ada)"'s
     # own printed label (first-pass regions started inside the label
     # itself, capturing label text instead of the value beside it).

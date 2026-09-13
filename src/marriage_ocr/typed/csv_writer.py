@@ -110,19 +110,50 @@ def _value(value: object | None) -> str:
     return str(value)
 
 
+# Real client samples print this exact value ("T. MAKLUMAT" / "T.MAKLUMAT",
+# an abbreviation of "Tiada Maklumat") directly on the form for a wali whose
+# age/IC genuinely was not recorded -- normalize_age/normalize_ic correctly
+# decline to parse that as a number/IC and fall back to None, but a blank
+# CSV cell then reads as "not extracted" rather than "the form itself says
+# there is no information", which is what a human reviewer needs to see.
+# Applied as a display-layer fallback for ANY blank Umur/IC Wali (not only
+# when the source is provably "T. MAKLUMAT") per explicit client request:
+# a confident wrong value is worse than this placeholder either way. `applies`
+# gates this to records where the field is structurally expected at all --
+# see the caller for why a bare None isn't enough on its own.
+def _value_or_no_info(value: object | None, *, applies: bool) -> str:
+    if applies and value is None:
+        return "TIADA MAKLUMAT"
+    return _value(value)
+
+
 def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
     record = result.record
+    # Umur Suami/Isteri/Wali and IC Wali only structurally exist on typed
+    # Nikah Modern records: Cerai/Rujuk have no Wali field at all, and Nikah
+    # Legacy prints a birthdate instead of an age for Suami/Isteri and has
+    # no Umur/IC Wali region defined (see _build_nikah_typed_record's
+    # docstring) -- there, these fields stay None because the concept
+    # doesn't apply to that layout, not because the form said so. Legacy
+    # is the only path that ever populates tarikh_lahir_suami/isteri, so
+    # its presence reliably rules out the Modern-only "TIADA MAKLUMAT"
+    # placeholder below.
+    umur_ic_wali_applies = (
+        record.record_type == "NIKAH"
+        and record.tarikh_lahir_suami is None
+        and record.tarikh_lahir_isteri is None
+    )
     return {
         "Record Type": _value(record.record_type),
         "Bil": _value(record.bil),
         "Nama Suami": _value(record.nama_suami),
         "IC Lama Suami": _value(record.ic_lama_suami),
         "IC Baru Suami": _value(record.ic_baru_suami),
-        "Umur Suami": _value(record.umur_suami),
+        "Umur Suami": _value_or_no_info(record.umur_suami, applies=umur_ic_wali_applies),
         "Nama Isteri": _value(record.nama_isteri),
         "IC Lama Isteri": _value(record.ic_lama_isteri),
         "IC Baru Isteri": _value(record.ic_baru_isteri),
-        "Umur Isteri": _value(record.umur_isteri),
+        "Umur Isteri": _value_or_no_info(record.umur_isteri, applies=umur_ic_wali_applies),
         "Mas Kahwin": _value(record.mas_kahwin),
         "Nama Pendaftar": _value(record.nama_pendaftar),
         "Alamat Pendaftar": _value(record.alamat_pendaftar),
@@ -141,8 +172,8 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Isteri Ke": _value(record.isteri_ke),
         "Belanja Hantaran": _value(record.belanja_hantaran),
         "Pemberian Lain": _value(record.pemberian_lain),
-        "IC Wali": _value(record.ic_wali),
-        "Umur Wali": _value(record.umur_wali),
+        "IC Wali": _value_or_no_info(record.ic_wali, applies=umur_ic_wali_applies),
+        "Umur Wali": _value_or_no_info(record.umur_wali, applies=umur_ic_wali_applies),
         "Alamat Wali": _value(record.alamat_wali),
         "IC Saksi 1": _value(record.ic_saksi_1),
         "IC Saksi 2": _value(record.ic_saksi_2),
