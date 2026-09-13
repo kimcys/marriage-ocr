@@ -128,7 +128,10 @@ Export OCR training data from reviewed records:
   --reset-output
 ```
 
-Process typed Borang 4B PDFs into a separate CSV:
+Process typed certificates into a separate CSV. `--config` is required --
+there is no default, and no single config covers every typed layout. Not
+sure which one your documents need? Run `classify --input <one file>`
+first; its `config_path` field names the right one.
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.json
@@ -136,9 +139,18 @@ python -m marriage_ocr.cli process-typed \
   --input input/typed \
   --output output/typed_records.csv \
   --debug debug/typed \
-  --config config/typed_borang4b.yaml \
+  --config config/typed_nikah_modern.yaml \
   --reset-output
 ```
+
+Available typed configs: `typed_nikah_legacy.yaml` / `typed_nikah_modern.yaml`,
+`typed_cerai_legacy.yaml` / `typed_cerai_modern.yaml`,
+`typed_rujuk_legacy.yaml` / `typed_rujuk_modern.yaml`. `typed_borang4b.yaml`
+still exists for old Nikah documents already processed under it, but its
+regions were never recalibrated against real samples and are documented
+(see `typed/template.py`) as bleeding `tarikh_nikah`/`alamat_pendaftar`/
+`nama_pendaftar` into each other -- new Nikah documents should always use
+`typed_nikah_legacy.yaml`/`typed_nikah_modern.yaml` instead.
 
 Typed input and output stay separate from the handwritten pipeline:
 
