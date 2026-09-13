@@ -83,34 +83,61 @@ BORANG_4B_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
 # there are deliberately no page-2 region entries below (TEMPLATES still
 # registers this as "pages": 2, since render_typed_pdf hard-fails on an
 # actual page-count mismatch).
+# Widened against THREE real samples spanning 1990/2000/2005 (one calibration
+# pass against a single 2005 sample wasn't enough -- confirmed empirically:
+# a tight region calibrated on 2005 alone truncated longer names/addresses on
+# the 2000 sample and missed several fields entirely on the 1990 sample).
+# Root cause is NOT random OCR noise: estimate_transform's dx/dy (from the
+# "SURAT PERAKUAN NIKAH"/"NAMA WALI" anchors) varies by real, consistent
+# amounts across these three actual scans (dx from 0 to -0.087, dy from 0 to
+# -0.034 on page 1), and scale_y correction gets clamped/dropped whenever the
+# transform is flagged unsafe (dx or dy over the shared 0.05 threshold, which
+# happens on both the 2000 and 1990 samples) -- see estimate_transform()'s
+# clamp and extractor.py's fallback to scale=1.0. Rather than loosen that
+# shared safety clamp (used by Cerai/Rujuk too, no evidence they need it
+# loosened), every field's X range here is widened to comfortably span its
+# whole printed row (left past the label, right past realistic content
+# width) and Y is widened by a fixed +-0.02/-0.03 margin sized to the actual
+# observed dy spread -- verified field-by-field against Vision word
+# positions captured from all three samples' debug output. Text/name/address
+# fields lean on normalize_plain_text's/_select_best_line's noise filtering
+# (prefers the digit-free, name-hint-bearing line) to recover the right
+# value even when a neighbouring row's label/text now falls inside the
+# region too; ID/date/bil fields rely on their own regex search plus
+# reading-order (top-to-bottom) precedence, since a field's own true value
+# always appears before a neighbour's bleed-in text in the joined raw text.
 NIKAH_LEGACY_REGIONS: dict[str, tuple[int, Region]] = {
-    "no_siri": (1, Region(0.78, 0.246, 0.95, 0.283)),
-    "bil": (1, Region(0.40, 0.312, 0.49, 0.328)),
-    "tarikh_nikah": (1, Region(0.44, 0.362, 0.60, 0.376)),
-    "tarikh_daftar": (1, Region(0.44, 0.403, 0.55, 0.416)),
-    "nama_suami": (1, Region(0.33, 0.418, 0.60, 0.432)),
-    "id_suami": (1, Region(0.40, 0.441, 0.53, 0.454)),
-    "tarikh_lahir_suami": (1, Region(0.74, 0.442, 0.84, 0.455)),
-    "alamat_suami": (1, Region(0.28, 0.464, 0.65, 0.478)),
-    "nama_isteri": (1, Region(0.33, 0.483, 0.60, 0.497)),
-    "id_isteri": (1, Region(0.40, 0.504, 0.53, 0.518)),
-    "tarikh_lahir_isteri": (1, Region(0.74, 0.505, 0.84, 0.518)),
-    "alamat_isteri": (1, Region(0.28, 0.525, 0.65, 0.539)),
-    "nama_wali": (1, Region(0.33, 0.547, 0.60, 0.560)),
-    "id_wali": (1, Region(0.40, 0.569, 0.55, 0.582)),
-    "alamat_wali": (1, Region(0.28, 0.589, 0.60, 0.603)),
-    "hubungan_wali": (1, Region(0.33, 0.609, 0.45, 0.623)),
-    "saksi_1": (1, Region(0.28, 0.656, 0.60, 0.669)),
-    "id_saksi_1": (1, Region(0.44, 0.679, 0.58, 0.691)),
-    "saksi_2": (1, Region(0.28, 0.720, 0.60, 0.733)),
-    "id_saksi_2": (1, Region(0.44, 0.741, 0.58, 0.754)),
-    "mas_kahwin": (1, Region(0.38, 0.780, 0.48, 0.794)),
-    "belanja_hantaran": (1, Region(0.42, 0.802, 0.52, 0.815)),
+    "no_siri": (1, Region(0.73, 0.216, 0.95, 0.303)),
+    "bil": (1, Region(0.30, 0.292, 0.64, 0.343)),
+    "tarikh_nikah": (1, Region(0.30, 0.337, 0.70, 0.401)),
+    # y1 pulled up well above the label's own row -- confirmed on the 2000
+    # sample that the Masihi date sometimes lands on the Hijri ("H ...") row
+    # printed just above "4. Tarikh didaftar pada" instead of beside the
+    # label itself, unlike 2005 where it's inline with the label.
+    "tarikh_daftar": (1, Region(0.34, 0.385, 0.70, 0.436)),
+    "nama_suami": (1, Region(0.18, 0.393, 0.75, 0.452)),
+    "id_suami": (1, Region(0.20, 0.416, 0.58, 0.474)),
+    "tarikh_lahir_suami": (1, Region(0.66, 0.417, 0.92, 0.475)),
+    "alamat_suami": (1, Region(0.13, 0.439, 0.80, 0.498)),
+    "nama_isteri": (1, Region(0.18, 0.458, 0.75, 0.517)),
+    "id_isteri": (1, Region(0.20, 0.479, 0.58, 0.538)),
+    "tarikh_lahir_isteri": (1, Region(0.66, 0.480, 0.92, 0.538)),
+    "alamat_isteri": (1, Region(0.13, 0.500, 0.80, 0.559)),
+    "nama_wali": (1, Region(0.18, 0.522, 0.75, 0.580)),
+    "id_wali": (1, Region(0.20, 0.544, 0.60, 0.602)),
+    "alamat_wali": (1, Region(0.13, 0.564, 0.75, 0.623)),
+    "hubungan_wali": (1, Region(0.23, 0.584, 0.65, 0.643)),
+    "saksi_1": (1, Region(0.13, 0.631, 0.75, 0.689)),
+    "id_saksi_1": (1, Region(0.29, 0.654, 0.66, 0.711)),
+    "saksi_2": (1, Region(0.13, 0.695, 0.75, 0.753)),
+    "id_saksi_2": (1, Region(0.29, 0.716, 0.66, 0.774)),
+    "mas_kahwin": (1, Region(0.28, 0.755, 0.63, 0.814)),
+    "belanja_hantaran": (1, Region(0.32, 0.777, 0.67, 0.835)),
     # x2 kept short of ~0.69 -- a circular registrar stamp overlaps this row
     # further right on the real sample and its text ("...PERCERAIAN...")
     # would otherwise bleed in.
-    "pemberian_lain": (1, Region(0.49, 0.867, 0.62, 0.880)),
-    "jumlah_bayaran": (1, Region(0.25, 0.916, 0.55, 0.941)),
+    "pemberian_lain": (1, Region(0.41, 0.842, 0.65, 0.900)),
+    "jumlah_bayaran": (1, Region(0.20, 0.896, 0.65, 0.961)),
 }
 
 NIKAH_LEGACY_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
@@ -131,56 +158,75 @@ NIKAH_LEGACY_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
     },
 }
 
+# Widened against TWO real samples (2009's own calibration scan plus a real
+# 2020 scan) -- a single-sample calibration pass wasn't enough. Confirmed
+# empirically that page-2 anchors alone underestimate a genuine ~14% larger
+# inter-row spacing on the 2020 sample (estimate_transform's scale_y computed
+# 1.1438 there, clamped to 1.0 since it's outside the shared [0.98,1.02]
+# tolerance -- see the identical situation and rationale documented on
+# NIKAH_LEGACY_REGIONS above), so only dy (not scale) corrects page 2, and
+# error compounds with distance from the page's own anchor. Every row's Y
+# range below is the union of both samples' real (Vision-detected) row
+# position, each converted back to template space via that sample's own
+# applied dy, plus a small fixed buffer -- not a guess. Rows that pack two
+# sub-fields side by side (Nama Suami's ID+Umur row, Warganegara+Bangsa,
+# Pernikahan Kali+Isteri Ke) keep a narrower per-field X split; solo-value
+# rows (names, addresses, tempat/nama pendaftar) widen X to most of the row
+# so a longer label on one print run doesn't truncate the value on either
+# sample, the same reasoning as NIKAH_LEGACY_REGIONS.
 NIKAH_MODERN_REGIONS: dict[str, tuple[int, Region]] = {
-    "no_siri": (1, Region(0.83, 0.030, 0.95, 0.068)),
-    "bil": (1, Region(0.36, 0.304, 0.50, 0.318)),
-    # x2 narrowed well short of 0.86 -- this form repeats its own "No. Siri"
-    # serial as a faint stamp at several points down the right margin (see
+    # y1 negative -- no_siri sits well above both page-1 anchors, so the
+    # anchor-derived dy (computed from content *below* it) overshoots
+    # downward here; confirmed on a real 2020 sample where the serial's
+    # word-centre landed just above y1=0 after that dy was applied.
+    "no_siri": (1, Region(0.68, -0.02, 0.97, 0.063)),
+    "bil": (1, Region(0.13, 0.277, 0.55, 0.321)),
+    # tarikh_daftar keeps a narrower X (not widened as generously as other
+    # fields) and stays out of the 0.68-0.86 band -- this form repeats its
+    # own "No. Siri" serial as a faint stamp down the right margin (see
     # no_siri's own region above and its recurrence near alamat_wali below),
-    # and 0.68-0.86 overlapped one of those repeats, bleeding "No. Siri :"
-    # into tarikh_daftar's raw text. Confirmed: that alone was enough to
-    # break normalize_date_preserving_style (rejects any trailing noise,
-    # unlike normalize_bil's more forgiving pattern search).
-    "tarikh_daftar": (1, Region(0.68, 0.304, 0.76, 0.318)),
-    "nama_suami": (1, Region(0.35, 0.435, 0.92, 0.456)),
-    "id_suami": (1, Region(0.35, 0.453, 0.52, 0.472)),
-    "umur_suami": (1, Region(0.65, 0.453, 0.78, 0.472)),
-    "warganegara_suami": (1, Region(0.30, 0.470, 0.52, 0.490)),
-    "bangsa_suami": (1, Region(0.65, 0.470, 0.85, 0.490)),
-    "alamat_suami": (1, Region(0.30, 0.487, 0.92, 0.524)),
-    "nama_isteri": (1, Region(0.35, 0.577, 0.92, 0.598)),
-    "id_isteri": (1, Region(0.35, 0.595, 0.52, 0.614)),
-    "umur_isteri": (1, Region(0.65, 0.595, 0.78, 0.614)),
-    "warganegara_isteri": (1, Region(0.30, 0.612, 0.52, 0.631)),
-    "bangsa_isteri": (1, Region(0.65, 0.612, 0.85, 0.631)),
-    "alamat_isteri": (1, Region(0.30, 0.629, 0.92, 0.665)),
-    "nama_wali": (1, Region(0.35, 0.718, 0.92, 0.738)),
-    "id_wali": (1, Region(0.35, 0.736, 0.52, 0.755)),
-    "umur_wali": (1, Region(0.65, 0.736, 0.78, 0.755)),
-    "hubungan_wali": (1, Region(0.19, 0.752, 0.45, 0.771)),
+    # and normalize_date_preserving_style (unlike normalize_bil's forgiving
+    # pattern search) rejects a date line with that trailing noise on it.
+    "tarikh_daftar": (1, Region(0.55, 0.277, 0.90, 0.321)),
+    "nama_suami": (1, Region(0.13, 0.422, 0.90, 0.451)),
+    "id_suami": (1, Region(0.13, 0.440, 0.62, 0.471)),
+    "umur_suami": (1, Region(0.58, 0.440, 0.90, 0.471)),
+    "warganegara_suami": (1, Region(0.13, 0.456, 0.58, 0.491)),
+    "bangsa_suami": (1, Region(0.53, 0.456, 0.90, 0.491)),
+    "alamat_suami": (1, Region(0.13, 0.479, 0.92, 0.521)),
+    "nama_isteri": (1, Region(0.13, 0.568, 0.90, 0.597)),
+    "id_isteri": (1, Region(0.13, 0.590, 0.62, 0.621)),
+    "umur_isteri": (1, Region(0.58, 0.590, 0.90, 0.621)),
+    "warganegara_isteri": (1, Region(0.13, 0.607, 0.58, 0.641)),
+    "bangsa_isteri": (1, Region(0.53, 0.607, 0.90, 0.641)),
+    "alamat_isteri": (1, Region(0.13, 0.625, 0.92, 0.679)),
+    "nama_wali": (1, Region(0.13, 0.714, 0.90, 0.748)),
+    "id_wali": (1, Region(0.13, 0.730, 0.62, 0.771)),
+    "umur_wali": (1, Region(0.58, 0.730, 0.90, 0.771)),
+    "hubungan_wali": (1, Region(0.13, 0.746, 0.60, 0.793)),
     # x2 narrowed (this form's own "No. Siri" serial repeats as a faint
     # stamp down the right margin -- see tarikh_daftar's comment above; here
     # it bled in as a trailing "No. Siri : <serial>" on alamat_wali's own
     # second line).
-    "alamat_wali": (1, Region(0.35, 0.770, 0.80, 0.806)),
-    "saksi_1": (2, Region(0.35, 0.133, 0.92, 0.153)),
-    "id_saksi_1": (2, Region(0.35, 0.150, 0.52, 0.170)),
-    "saksi_2": (2, Region(0.35, 0.246, 0.92, 0.266)),
-    "id_saksi_2": (2, Region(0.35, 0.264, 0.52, 0.283)),
-    "tarikh_nikah_hijri": (2, Region(0.33, 0.363, 0.47, 0.383)),
-    "tarikh_nikah": (2, Region(0.32, 0.379, 0.50, 0.402)),
-    "hari_nikah": (2, Region(0.51, 0.369, 0.63, 0.389)),
-    "masa_nikah": (2, Region(0.70, 0.369, 0.92, 0.389)),
-    "tempat_nikah": (2, Region(0.30, 0.404, 0.92, 0.424)),
-    "nama_pendaftar": (2, Region(0.40, 0.421, 0.92, 0.445)),
-    "pernikahan_kali": (2, Region(0.30, 0.446, 0.47, 0.466)),
-    "isteri_ke": (2, Region(0.53, 0.446, 0.68, 0.466)),
-    "mas_kahwin": (2, Region(0.20, 0.464, 0.40, 0.488)),
+    "alamat_wali": (1, Region(0.13, 0.765, 0.80, 0.828)),
+    "saksi_1": (2, Region(0.13, 0.112, 0.90, 0.149)),
+    "id_saksi_1": (2, Region(0.13, 0.134, 0.90, 0.168)),
+    "saksi_2": (2, Region(0.13, 0.239, 0.90, 0.267)),
+    "id_saksi_2": (2, Region(0.13, 0.258, 0.90, 0.290)),
+    "tarikh_nikah_hijri": (2, Region(0.13, 0.363, 0.60, 0.399)),
+    "tarikh_nikah": (2, Region(0.13, 0.379, 0.55, 0.409)),
+    "hari_nikah": (2, Region(0.45, 0.363, 0.65, 0.399)),
+    "masa_nikah": (2, Region(0.62, 0.363, 0.90, 0.399)),
+    "tempat_nikah": (2, Region(0.13, 0.400, 0.90, 0.438)),
+    "nama_pendaftar": (2, Region(0.13, 0.420, 0.90, 0.459)),
+    "pernikahan_kali": (2, Region(0.13, 0.441, 0.50, 0.479)),
+    "isteri_ke": (2, Region(0.45, 0.441, 0.75, 0.479)),
+    "mas_kahwin": (2, Region(0.13, 0.462, 0.70, 0.502)),
     # x1 shifted right of "Belanja Hantaran:"/"Pemberian Lain (Jika Ada)"'s
     # own printed label (first-pass regions started inside the label
     # itself, capturing label text instead of the value beside it).
-    "belanja_hantaran": (2, Region(0.30, 0.488, 0.55, 0.508)),
-    "pemberian_lain": (2, Region(0.40, 0.509, 0.65, 0.529)),
+    "belanja_hantaran": (2, Region(0.13, 0.483, 0.60, 0.520)),
+    "pemberian_lain": (2, Region(0.13, 0.504, 0.60, 0.541)),
 }
 
 NIKAH_MODERN_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {

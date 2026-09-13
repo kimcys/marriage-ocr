@@ -9,7 +9,10 @@ from marriage_ocr.typed.models import RawField
 from marriage_ocr.refinement.text_corrections import generate_date_candidates
 
 
-BIL_PATTERN = re.compile(r"\b\d+\s*/\s*\d{4}\b")
+# \d{2,4}, not a fixed \d{4} -- confirmed on a real 1990 Borang 3A sample
+# ("384/90") that the oldest legacy forms print a 2-digit year for Bilangan
+# Daftar, not the 4-digit year every later form uses.
+BIL_PATTERN = re.compile(r"\b\d+\s*/\s*\d{2,4}\b")
 DATE_PATTERN = re.compile(r"\b(\d{1,2})\s*([./-])\s*(\d{1,2})\s*\2\s*(\d{4})\b")
 # Legacy Cerai/Rujuk certs (Borang 5/9, 1984 enactment) print amounts with a
 # "$" prefix (pre-Ringgit-renaming Malaysian dollar notation) rather than
@@ -18,19 +21,106 @@ DATE_PATTERN = re.compile(r"\b(\d{1,2})\s*([./-])\s*(\d{1,2})\s*\2\s*(\d{4})\b")
 MAS_KAHWIN_PATTERN = re.compile(r"(?:RM|\$)\s*([0-9][0-9\s,]*(?:\.[0-9]{1,2})?)", re.IGNORECASE)
 _IC_DIGITS = re.compile(r"\D+")
 _LEADING_LABELS = {
-    "nama_suami": re.compile(r"^\s*(nama\s*:?\s*)", re.IGNORECASE),
-    "nama_isteri": re.compile(r"^\s*(nama\s*:?\s*)", re.IGNORECASE),
-    "nama_pendaftar": re.compile(r"^\s*(nama\s*:?\s*)", re.IGNORECASE),
-    "nama_wali": re.compile(r"^\s*(nama\s*:?\s*)", re.IGNORECASE),
-    "hubungan_wali": re.compile(r"^\s*(hubungan\s*:?\s*)", re.IGNORECASE),
-    "saksi_1": re.compile(r"^\s*(saksi\s*1\s*:?\s*)", re.IGNORECASE),
-    "saksi_2": re.compile(r"^\s*(saksi\s*2\s*:?\s*)", re.IGNORECASE),
+    "nama_suami": re.compile(r"^\s*(\d\s*\.\s*)?(nama\s*(suami)?\s*:?\s*)", re.IGNORECASE),
+    "nama_isteri": re.compile(r"^\s*(\d\s*\.?\s*)?(nama\s*(isteri)?\s*:?\s*)", re.IGNORECASE),
+    # The real printed label repeats "Pendaftar" twice ("Nama Pendaftar /
+    # Pen . Pendaftar :") -- a pattern that only strips the first "Nama
+    # Pendaftar" left "/ Pen . Pendaftar ..." in front of the actual name,
+    # and since PENDAFTAR is also a generic _TRAILING_NOISE_PATTERN
+    # keyword (for stripping bleed from OTHER fields), that leftover
+    # "Pendaftar" then nuked the rest of the value as if it were noise.
+    "nama_pendaftar": re.compile(r"^\s*(nama\s*pendaftar\s*(/\s*pen\s*\.?\s*)?(pendaftar)?\s*:?\s*)", re.IGNORECASE),
+    "nama_wali": re.compile(r"^\s*(\d\s*\.\s*)?(nama\s*wali\s*:?\s*)", re.IGNORECASE),
+    # (per)? -- the legacy Borang 3A form prints "Perhubungan", not "Hubungan"
+    # (modern's wording); without it this label was never stripped at all on
+    # legacy samples, since "Perhubungan" has no word boundary before
+    # "hubungan" for a plain "hubungan" pattern to match.
+    "hubungan_wali": re.compile(r"^\s*(per)?(hubungan\s*:?\s*)", re.IGNORECASE),
+    "saksi_1": re.compile(r"^\s*(\(\s*i\s*\)\s*)?(nama\s*)?(saksi\s*1\s*:?\s*)", re.IGNORECASE),
+    "saksi_2": re.compile(r"^\s*(\(\s*ii\s*\)\s*)?(nama\s*)?(saksi\s*2\s*:?\s*)", re.IGNORECASE),
     "tarikh_nikah": re.compile(r"^\s*(tarikh\s*nikah\s*:?\s*)", re.IGNORECASE),
+    # Both phrasings seen on real samples: "Tarikh Nikah Hijrah : ..." and
+    # "Tarikh Nikah : Hijrah ...". Needs its own label (rather than falling
+    # through with field_key=None) because "TARIKH NIKAH" is also a generic
+    # _TRAILING_NOISE_PATTERN keyword -- without stripping it here first,
+    # that keyword wiped this field's own correctly-labelled value to
+    # nothing, the same self-erasure already fixed for no_siri/nama_pendaftar.
+    "tarikh_nikah_hijri": re.compile(r"^\s*(tarikh\s*nikah\s*(hijrah)?\s*:?\s*(hijrah\s*:?\s*)?)", re.IGNORECASE),
     "alamat_pendaftar": re.compile(r"^\s*(alamat\s*:?\s*)", re.IGNORECASE),
     "mas_kahwin": re.compile(r"^\s*(mas\s*kahwin\s*:?\s*)", re.IGNORECASE),
+    # Added for typed Nikah's legacy/modern split -- these fields are new
+    # this pass and were falling through with no label stripped at all
+    # (normalize_plain_text/normalize_address were being called without a
+    # field_key at all in _build_nikah_typed_record, so none of these ever
+    # took effect; fixed there too).
+    "bangsa_suami": re.compile(r"^\s*(bangsa\s*:?\s*)", re.IGNORECASE),
+    "bangsa_isteri": re.compile(r"^\s*(bangsa\s*:?\s*)", re.IGNORECASE),
+    "warganegara_suami": re.compile(r"^\s*(warganegara\s*:?\s*)", re.IGNORECASE),
+    "warganegara_isteri": re.compile(r"^\s*(warganegara\s*:?\s*)", re.IGNORECASE),
+    "alamat_suami": re.compile(r"^\s*(alamat\s*(rumah)?\s*:?\s*)", re.IGNORECASE),
+    "alamat_isteri": re.compile(r"^\s*(alamat\s*(rumah)?\s*:?\s*)", re.IGNORECASE),
+    "alamat_wali": re.compile(r"^\s*(alamat\s*(pejabat)?\s*:?\s*)", re.IGNORECASE),
+    "tempat_nikah": re.compile(r"^\s*(tempat\s*:?\s*)", re.IGNORECASE),
+    "pernikahan_kali": re.compile(r"^\s*(pernikahan\s*kali\s*:?\s*)", re.IGNORECASE),
+    # (isteri\s*)? -- "Pernikahan Kali : ... Isteri ke : ..." is one printed
+    # row; when Vision splits it across two joined lines, the wrap can start
+    # mid-label at bare "ke :" with "Isteri" left on the line above, so the
+    # full-phrase-only pattern never matched at all.
+    "isteri_ke": re.compile(r"^\s*((isteri\s*)?ke\s*:?\s*)", re.IGNORECASE),
+    # No literal "hari"/"masa" text precedes these on a bled-in continuation
+    # line (e.g. "1441 Hari : JUMAAT") -- non-greedy so it also strips a
+    # neighbouring field's tail sitting in front of the real label.
+    "hari_nikah": re.compile(r"^\s*(.*?\bhari\b\s*:?\s*)", re.IGNORECASE),
+    "masa_nikah": re.compile(r"^\s*(.*?\bmasa\b\s*:?\s*)", re.IGNORECASE),
+    # Vision's own printed label repeats the field name twice on typed
+    # Nikah's "No. Siri : ######" stamp/header; without stripping it here,
+    # the leftover "No. Siri" text then matched _TRAILING_NOISE_PATTERN's
+    # own "NO. SIRI" keyword (added there to strip *bleed* of this label
+    # into OTHER fields) and erased the real serial along with it.
+    "no_siri": re.compile(r"^\s*(no\.?\s*sir[in]?\s*:?\s*)", re.IGNORECASE),
+    # (belanja\s*)? -- Vision OCR's line-grouping sometimes splits "Belanja"
+    # onto a different line than "Hantaran ..." (confirmed on a real legacy
+    # sample), which used to defeat the whole match since it previously
+    # required both words together.
+    "belanja_hantaran": re.compile(r"^\s*((belanja\s*)?hantaran\s*:?\s*)", re.IGNORECASE),
+    "pemberian_lain": re.compile(r"^\s*(pemberian\s*lain\s*(\(\s*jika\s*ada\s*\))?\s*:?\s*)", re.IGNORECASE),
 }
 _TRAILING_NOISE_PATTERN = re.compile(
-    r"\b(?:NO\.?\s*SIRI|NO\.?\s*SIN|UMUR|BANGSA|WARGANEGARA|ALAMAT|PENDAFTAR|HUBUNGAN|SAKSI\s+PERTAMA|SAKSI\s+KEDUA)\b.*$",
+    r"\b(?:"
+    r"NO\.?\s*SIRI|NO\.?\s*SIN|NO\.?\s*KAD\s*PENGENALAN|KAD\s*PENGENALAN|PASPORT|"
+    # NAMA bare (not just "NAMA SAKSI"/"NAMA WALI") -- Nikah's widened
+    # regions (see NIKAH_LEGACY_REGIONS/NIKAH_MODERN_REGIONS) routinely
+    # bleed in a whole neighbouring "N. Nama Isteri/Suami/Wali ..." row
+    # ahead of or after a field's real value; that entire bled-in line
+    # needs to disappear (not just have its own label stripped), and a
+    # line that becomes empty after this is dropped by normalize_wrapped_
+    # field/normalize_remarks's non-empty-line filter.
+    r"UMUR|BANGSA|WARGANEGARA|ALAMAT|PENDAFTAR|(?:PER)?HUBUNGAN|NAMA|"
+    r"SAKSI\s+PERTAMA|SAKSI\s+KEDUA|"
+    # MASIHI/HIJRAH bare -- typed Nikah modern's "Tarikh Nikah : Hijrah ...
+    # Masihi <date>" row sits directly above tempat_nikah's widened region
+    # (see NIKAH_MODERN_REGIONS) and bleeds in as its own whole line; these
+    # calendar-system labels never appear inside real address/name content.
+    r"MASIHI|HIJRAH|"
+    # HARI bare -- tarikh_nikah_hijri and hari_nikah share one printed row
+    # ("... Hijrah ____ Hari ____ Masa : ..."), so a blank Hijri value (real
+    # on some samples) leaves just the next section's bare "Hari" label
+    # behind as if it were content; hari_nikah's own leading-label pattern
+    # already consumes "hari" from the FRONT of its own line before this
+    # runs, so this only ever strips a bled-in trailing occurrence.
+    r"TARIKH\s*LAHIR|TARIKH\s*MASUK\s*ISLAM|TARIKH\s*NIKAH|TARIKH\s*DAFTAR|HARI|"
+    # ISTERI bare, not just "ISTERI KE" -- pernikahan_kali's own row can wrap
+    # so only "Isteri" (no "ke") lands at its tail (confirmed on a real
+    # sample); by the time isteri_ke's own leading-label pattern runs on its
+    # own line, "Isteri" is already stripped from the front there, so
+    # broadening this to bare ISTERI doesn't touch that field's own value.
+    # KAHWIN bare, not just "MAS KAHWIN" -- same line-split issue as ISTERI
+    # above ("Mas" and "Kahwin ... RM80.00" landing on separate joined
+    # lines on a real legacy sample), which let mas_kahwin's own value
+    # survive unstripped and get mistaken for belanja_hantaran's.
+    r"PERNIKAHAN\s*KALI|ISTERI(?:\s*KE)?|(?:MAS\s*)?KAHWIN|BELANJA\s*HANTARAN|PEMBERIAN\s*LAIN|"
+    r"JUMLAH\s*BAYARAN|TANDATANGAN"
+    r")\b.*$",
     re.IGNORECASE,
 )
 # Vision occasionally reads a printed tick mark or a dotted fill-in-the-blank
@@ -195,12 +285,30 @@ def normalize_mas_kahwin(raw: str | None) -> str | None:
 normalize_money = normalize_mas_kahwin
 
 
+_LEADING_SECTION_NUMBER = re.compile(r"^\s*\(?\s*\d{1,2}\s*[.)]\s*")
+
+
 def _strip_label(value: str, field_key: str) -> str:
+    # Applied before the field-specific pattern, not just after -- Nikah's
+    # typed regions are wide enough now (to tolerate cross-sample drift,
+    # see NIKAH_LEGACY_REGIONS/NIKAH_MODERN_REGIONS) that a neighbouring
+    # row's own leading "6." / "7." section number routinely bleeds into a
+    # field's captured text; that prefix is never real content for any
+    # field, so it comes off unconditionally rather than per-field.
+    result = _LEADING_SECTION_NUMBER.sub("", value)
     pattern = _LEADING_LABELS.get(field_key)
-    result = value
     if pattern is not None:
         result = pattern.sub("", result, count=1)
-    result = result.replace(":", " ")
+    # A leading colon only -- not every colon in the string. masa_nikah's
+    # value can itself contain one ("9:30 PM"); a blanket replace used to
+    # turn that into "9 30 PM" whenever the label pattern above left a
+    # stray colon in front of it.
+    result = re.sub(r"^\s*:\s*", "", result)
+    # A label's own printed fill-in blank ("Nama Suami ....." / "Alamat ...")
+    # is dots/dashes/underscores immediately after the label -- strip
+    # whatever the field-specific pattern above left in place, the same way
+    # _strip_trailing_noise already strips that same filler at the far end.
+    result = re.sub(r"^[\s.\-_]+", "", result)
     result = re.sub(r"[ \t]+", " ", result)
     return result.strip()
 
@@ -223,6 +331,14 @@ def _score_line_for_field(line: str, field_key: str | None) -> tuple[int, int, i
     if field_key == "hubungan_wali":
         if any(token in upper for token in ("BAPA", "KANDUNG", "WALI", "HAKIM")):
             score += 4
+    if field_key in ("pernikahan_kali", "isteri_ke"):
+        # These fields' real value is always a short ordinal word -- without
+        # this, best-line selection's plain word-count scoring prefers a
+        # longer neighbouring field's bleed (confirmed on a real sample: a
+        # registrar's name outscored the correct "PERTAMA" on word count
+        # alone once Nikah's widened regions started letting that bleed in).
+        if any(token in upper for token in ("PERTAMA", "KEDUA", "KETIGA", "KEEMPAT", "KELIMA")):
+            score += 10
     if field_key == "alamat_pendaftar":
         if any(token in upper for token in ("PEJABAT", "ALAMAT", "TEMPAT")):
             score += 3
@@ -245,6 +361,22 @@ def _select_best_line(lines: list[str], field_key: str | None) -> str | None:
                 address_candidates.append(line)
         if address_candidates:
             candidates = address_candidates
+    elif field_key in ("no_siri", "pernikahan_kali", "isteri_ke"):
+        # no_siri is a bare serial number -- the opposite of every other
+        # plain_text field here, which is text and wants the no-digit
+        # branch below. Without this, a widened region that picks up a
+        # neighbouring watermark/stamp misread (confirmed on a real legacy
+        # sample: raw text "AARAT\nNo 092113") loses the real value, since
+        # the default branch actively prefers the digit-free garbage line.
+        # pernikahan_kali/isteri_ke's real value is "PERTAMA ( 1 )" style --
+        # that parenthetical digit used to make the no-digit branch below
+        # throw away the correct line in favour of an unrelated digit-free
+        # neighbour (confirmed on a real sample: "* Tunai" outscored
+        # "PERTAMA ( 1 )" this way, before the ordinal-word bonus above
+        # even got a chance to run).
+        digit_candidates = [line for line in candidates if any(char.isdigit() for char in line)]
+        if digit_candidates:
+            candidates = digit_candidates
     else:
         no_digit = [line for line in candidates if not any(char.isdigit() for char in line)]
         if no_digit:
@@ -309,6 +441,39 @@ def normalize_remarks(raw: str | None) -> str | None:
 # do instead of normalize_plain_text's "pick one best line" behaviour, which
 # would silently drop half the address.
 normalize_address = normalize_remarks
+
+
+def normalize_wrapped_field(raw: str | None, *, field_key: str | None = None) -> str | None:
+    """Like normalize_remarks/normalize_address (joins every real line,
+    rather than normalize_plain_text's "pick one best line" -- needed
+    because typed Nikah's own addresses sometimes wrap a trailing state
+    name onto its own line, confirmed on a real modern sample), but ALSO
+    strips each line's own leading label and trailing next-field noise
+    first via the same _strip_label/_strip_trailing_noise normalize_plain_text
+    uses. Deliberately separate from normalize_address/normalize_remarks
+    (used as-is by Cerai/Rujuk) rather than changing their behaviour --
+    those fields' regions were calibrated tightly enough that no label ever
+    lands in the captured text, so adding stripping there is unnecessary
+    risk for no benefit; typed Nikah's regions are deliberately wider (to
+    tolerate the layout variance between samples), so any given line here
+    is more likely to carry a label or a neighbouring field's bleed that
+    needs stripping before joining.
+    """
+    if raw is None:
+        return None
+    lines = [line.strip() for line in str(raw).splitlines() if line.strip()]
+    cleaned_lines = []
+    for line in lines:
+        if _PLACEHOLDER_LINE_PATTERN.match(line):
+            continue
+        line = _strip_label(line, field_key)
+        line = _strip_trailing_noise(line)
+        line = re.sub(r"\s+", " ", line).strip(" ,")
+        if line:
+            cleaned_lines.append(line)
+    if not cleaned_lines:
+        return None
+    return " ".join(cleaned_lines)
 
 # The registrar's printed job title/office (e.g. "Pendaftar Perkahwinan,
 # Perceraian Dan Rujuk Orang Islam" / "Pejabat Agama Islam Daerah Petaling")
@@ -450,7 +615,7 @@ def _build_nikah_typed_record(raw_fields: dict[str, RawField], *, template_name:
     record = ExtractedRecord(
         record_type="NIKAH",
         bil=normalize_bil(_raw(raw_fields, "bil")),
-        no_siri=normalize_plain_text(_raw(raw_fields, "no_siri")),
+        no_siri=normalize_plain_text(_raw(raw_fields, "no_siri"), field_key="no_siri"),
         tarikh_daftar=normalize_date_preserving_style(_raw(raw_fields, "tarikh_daftar")),
         nama_suami=normalize_name(_raw(raw_fields, "nama_suami"), field_key="nama_suami"),
         ic_lama_suami=ic_lama_suami,
@@ -458,40 +623,40 @@ def _build_nikah_typed_record(raw_fields: dict[str, RawField], *, template_name:
         id_suami_raw=_raw(raw_fields, "id_suami"),
         umur_suami=normalize_age(_raw(raw_fields, "umur_suami"), min_age=16, max_age=120),
         tarikh_lahir_suami=normalize_birth_year_or_date(_raw(raw_fields, "tarikh_lahir_suami")),
-        warganegara_suami=normalize_plain_text(_raw(raw_fields, "warganegara_suami")),
-        bangsa_suami=normalize_plain_text(_raw(raw_fields, "bangsa_suami")),
-        alamat_suami=normalize_address(_raw(raw_fields, "alamat_suami")),
+        warganegara_suami=normalize_plain_text(_raw(raw_fields, "warganegara_suami"), field_key="warganegara_suami"),
+        bangsa_suami=normalize_plain_text(_raw(raw_fields, "bangsa_suami"), field_key="bangsa_suami"),
+        alamat_suami=normalize_wrapped_field(_raw(raw_fields, "alamat_suami"), field_key="alamat_suami"),
         nama_isteri=normalize_name(_raw(raw_fields, "nama_isteri"), field_key="nama_isteri"),
         ic_lama_isteri=ic_lama_isteri,
         ic_baru_isteri=ic_baru_isteri,
         id_isteri_raw=_raw(raw_fields, "id_isteri"),
         umur_isteri=normalize_age(_raw(raw_fields, "umur_isteri"), min_age=16, max_age=120),
         tarikh_lahir_isteri=normalize_birth_year_or_date(_raw(raw_fields, "tarikh_lahir_isteri")),
-        warganegara_isteri=normalize_plain_text(_raw(raw_fields, "warganegara_isteri")),
-        bangsa_isteri=normalize_plain_text(_raw(raw_fields, "bangsa_isteri")),
-        alamat_isteri=normalize_address(_raw(raw_fields, "alamat_isteri")),
+        warganegara_isteri=normalize_plain_text(_raw(raw_fields, "warganegara_isteri"), field_key="warganegara_isteri"),
+        bangsa_isteri=normalize_plain_text(_raw(raw_fields, "bangsa_isteri"), field_key="bangsa_isteri"),
+        alamat_isteri=normalize_wrapped_field(_raw(raw_fields, "alamat_isteri"), field_key="alamat_isteri"),
         nama_wali=normalize_name(_raw(raw_fields, "nama_wali"), field_key="nama_wali"),
         ic_wali=ic_wali,
         umur_wali=normalize_age(_raw(raw_fields, "umur_wali"), min_age=16, max_age=120),
         hubungan_wali=normalize_plain_text(_raw(raw_fields, "hubungan_wali"), field_key="hubungan_wali"),
-        alamat_wali=normalize_address(_raw(raw_fields, "alamat_wali")),
+        alamat_wali=normalize_wrapped_field(_raw(raw_fields, "alamat_wali"), field_key="alamat_wali"),
         saksi_1=normalize_plain_text(_raw(raw_fields, "saksi_1"), field_key="saksi_1"),
         ic_saksi_1=ic_saksi_1,
         saksi_2=normalize_plain_text(_raw(raw_fields, "saksi_2"), field_key="saksi_2"),
         ic_saksi_2=ic_saksi_2,
         tarikh_nikah=normalize_date_preserving_style(_raw(raw_fields, "tarikh_nikah")),
         tarikh_nikah_raw=_raw(raw_fields, "tarikh_nikah"),
-        tarikh_nikah_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_nikah_hijri")),
-        hari_nikah=normalize_plain_text(_raw(raw_fields, "hari_nikah")),
-        masa_nikah=normalize_plain_text(_raw(raw_fields, "masa_nikah")),
-        tempat_nikah=normalize_address(_raw(raw_fields, "tempat_nikah")),
+        tarikh_nikah_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_nikah_hijri"), field_key="tarikh_nikah_hijri"),
+        hari_nikah=normalize_plain_text(_raw(raw_fields, "hari_nikah"), field_key="hari_nikah"),
+        masa_nikah=normalize_plain_text(_raw(raw_fields, "masa_nikah"), field_key="masa_nikah"),
+        tempat_nikah=normalize_wrapped_field(_raw(raw_fields, "tempat_nikah"), field_key="tempat_nikah"),
         nama_pendaftar=normalize_plain_text(_raw(raw_fields, "nama_pendaftar"), field_key="nama_pendaftar"),
-        pernikahan_kali=normalize_plain_text(_raw(raw_fields, "pernikahan_kali")),
-        isteri_ke=normalize_plain_text(_raw(raw_fields, "isteri_ke")),
+        pernikahan_kali=normalize_plain_text(_raw(raw_fields, "pernikahan_kali"), field_key="pernikahan_kali"),
+        isteri_ke=normalize_plain_text(_raw(raw_fields, "isteri_ke"), field_key="isteri_ke"),
         mas_kahwin=normalize_mas_kahwin(_raw(raw_fields, "mas_kahwin")),
         mas_kahwin_raw=_raw(raw_fields, "mas_kahwin"),
-        belanja_hantaran=normalize_plain_text(_raw(raw_fields, "belanja_hantaran")),
-        pemberian_lain=normalize_plain_text(_raw(raw_fields, "pemberian_lain")),
+        belanja_hantaran=normalize_plain_text(_raw(raw_fields, "belanja_hantaran"), field_key="belanja_hantaran"),
+        pemberian_lain=normalize_plain_text(_raw(raw_fields, "pemberian_lain"), field_key="pemberian_lain"),
         jumlah_bayaran=normalize_money(_raw(raw_fields, "jumlah_bayaran")),
         raw_bil=_raw(raw_fields, "bil"),
         raw_suami_isteri=_first_non_empty([_raw(raw_fields, "nama_suami"), _raw(raw_fields, "id_suami")]),
