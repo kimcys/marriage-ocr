@@ -357,3 +357,29 @@ def test_isteri_ke_rejects_a_bled_in_registrars_name_outright() -> None:
     # genuinely blank on that document). A wrong confident name is worse
     # than admitting the field is unreadable.
     assert normalize_plain_text("MOHD YUSOF BIN MOHD TAHIR", field_key="isteri_ke") is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # Each a different OCR misreading of "No. Siri <serial>" bleeding
+        # into nama_isteri on a real client sample -- _TRAILING_BARE_NO_
+        # PATTERN only covered a bare "No." with nothing after it; none of
+        # these have "Siri" spelled correctly, or have the serial's digits
+        # still directly attached.
+        ("AINAH BINTI TARMAN Nc Sid 016213", "AINAH BINTI TARMAN"),
+        ("SITI APSIAH BINTI DARWI Na Siri 018945", "SITI APSIAH BINTI DARWI"),
+        ("MARIAM BIN DEROM No. 018964", "MARIAM BIN DEROM"),
+        ("SITI AISHAH BINTI SAHAMIN NC SH 016180", "SITI AISHAH BINTI SAHAMIN"),
+    ],
+)
+def test_nama_isteri_drops_stray_no_siri_ocr_misreadings(raw: str, expected: str) -> None:
+    assert normalize_plain_text(raw, field_key="nama_isteri") == expected
+
+
+def test_stray_no_siri_pattern_does_not_eat_real_names_or_house_numbers() -> None:
+    # A name starting with "Na"/"No" is never followed by a 4+ digit run
+    # immediately after in real content, and a genuine in-progress house
+    # number is 1-3 digits -- both must survive untouched.
+    assert normalize_plain_text("AHMAD NASIR BIN ALI", field_key="nama_suami") == "AHMAD NASIR BIN ALI"
+    assert normalize_plain_text("MOHD NOOR BIN ISMAIL", field_key="nama_suami") == "MOHD NOOR BIN ISMAIL"

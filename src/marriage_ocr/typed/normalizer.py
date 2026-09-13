@@ -145,6 +145,20 @@ _TRAILING_SYMBOL_NOISE = re.compile(r"(?:[✓✗]+|[.\-–—_]{2,})\s*$")
 # in-progress house number like "NO. 19 , JLN ..." (there is always more
 # text after "No." there).
 _TRAILING_BARE_NO_PATTERN = re.compile(r"\(?\s*\bno\.?\s*:?\s*$", re.IGNORECASE)
+# The same "No. Siri : ######" stamp bleed, but with the serial's digits
+# still attached (so the line doesn't end right after "No." -- the pattern
+# above only matches when nothing follows). Confirmed on several real
+# client samples, each a different OCR misreading of "No. Siri": "Nc Sid
+# 016213", "Na Siri 018945", "NC SH 016180", and a bare "No. 018964" with
+# "Siri" dropped entirely. Requires the trailing digit run to be
+# serial-length (4-7 digits) specifically so this can't fire on a real
+# in-progress house number ("NO. 19 , JLN ...", 1-3 digits) or swallow a
+# genuine name that happens to start with "Na"/"No" (e.g. "NASIR", "NOOR")
+# -- those never have a 4+ digit run immediately after, so the required
+# \d{4,7} simply won't be there to complete the match. Not anchored to
+# end-of-line like the bare pattern above, since this bleed has shown up
+# mid-line too (a name followed by this fragment followed by more text).
+_STRAY_NO_SIRI_PATTERN = re.compile(r"\b(?:n[oac]\.?\s*s[a-z]{1,4}|no\.?)\s+\d{4,7}\b", re.IGNORECASE)
 # The "( KETUA PENDAFTAR )" registrar-stamp is a *bounded* parenthetical
 # (a title, "KETUA" plus exactly one more word) that can land mid-line,
 # not just at the end -- confirmed on a real modern sample where Vision
@@ -357,10 +371,16 @@ def _strip_label(value: str, field_key: str) -> str:
     return result.strip()
 
 
-def _strip_trailing_noise(value: str) -> str:
+def _strip_trailing_noise(value: str, field_key: str | None = None) -> str:
     value = _TRAILING_NOISE_PATTERN.sub("", value).strip()
     value = _TRAILING_SYMBOL_NOISE.sub("", value).strip()
     value = _TRAILING_BARE_NO_PATTERN.sub("", value).strip()
+    # Skipped for no_siri itself -- "No <digits>" (or "No. Siri <digits>")
+    # is that field's own legitimate content, not bleed to strip away, and
+    # this runs before _select_best_line's own no_siri handling ever gets a
+    # chance to choose between candidate lines.
+    if field_key != "no_siri":
+        value = _STRAY_NO_SIRI_PATTERN.sub("", value).strip()
     value = _KETUA_STAMP_PATTERN.sub("", value).strip()
     return _TRAILING_BARE_KETUA_PATTERN.sub("", value).strip()
 
@@ -463,7 +483,7 @@ def normalize_plain_text(raw: str | None, *, field_key: str | None = None) -> st
     cleaned_lines = []
     for line in lines:
         line = _strip_label(line, field_key)
-        line = _strip_trailing_noise(line)
+        line = _strip_trailing_noise(line, field_key)
         line = re.sub(r"[ \t]+", " ", line).strip(" ,")
         if line:
             cleaned_lines.append(line)
@@ -549,7 +569,7 @@ def normalize_wrapped_field(raw: str | None, *, field_key: str | None = None) ->
         if _PLACEHOLDER_LINE_PATTERN.match(line):
             continue
         line = _strip_label(line, field_key)
-        line = _strip_trailing_noise(line)
+        line = _strip_trailing_noise(line, field_key)
         line = re.sub(r"\s+", " ", line).strip(" ,")
         if line:
             cleaned_lines.append(line)

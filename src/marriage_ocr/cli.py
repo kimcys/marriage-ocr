@@ -340,7 +340,23 @@ def process_typed(
     input_path: Path = typer.Option(..., "--input", help="Input PDF folder or file"),
     output_path: Path = typer.Option(Path("output/typed_records.csv"), "--output", help="Typed CSV output path"),
     debug_path: Path = typer.Option(Path("debug/typed"), "--debug", help="Typed debug output folder"),
-    config_path: Path = typer.Option(Path("config/typed_borang4b.yaml"), "--config", help="Typed config file"),
+    config_path: Path = typer.Option(
+        ...,
+        "--config",
+        help=(
+            "Typed config file -- required, no default. There is no single"
+            " 'typed' config: pick the one matching your documents, e.g."
+            " config/typed_nikah_legacy.yaml, config/typed_nikah_modern.yaml,"
+            " config/typed_cerai_legacy.yaml, config/typed_cerai_modern.yaml,"
+            " config/typed_rujuk_legacy.yaml, config/typed_rujuk_modern.yaml"
+            " (run `classify --input <file>` first if you're not sure which)."
+            " config/typed_borang4b.yaml still exists for old Nikah documents"
+            " already processed under it, but its regions were never"
+            " recalibrated against real samples and are known to bleed"
+            " tarikh_nikah/alamat_pendaftar/nama_pendaftar into each other --"
+            " new Nikah documents should use nikah_legacy/nikah_modern instead."
+        ),
+    ),
     reset_output: bool = typer.Option(False, "--reset-output", help="Delete old typed CSV before processing"),
     skip_existing: bool = typer.Option(False, "--skip-existing", help="Skip typed rows already processed successfully"),
 ) -> None:
