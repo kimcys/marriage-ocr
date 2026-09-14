@@ -22,6 +22,65 @@ LOGGER = logging.getLogger(__name__)
 
 TRANSIENT_GEMINI_HTTP_CODES = frozenset({429, 500, 502, 503, 504})
 
+# USD per 1M tokens, (input, output) -- output price already includes thinking
+# tokens per Google's own pricing page, so thinking is billed at the output
+# rate, not separately. Confirmed empirically (real API call, same page image)
+# that a "-preview" reasoning model can spend several times more tokens on
+# invisible "thinking" than on its actual visible output -- 8,332 thinking vs.
+# 1,681 visible output tokens for gemini-3-flash-preview on one real sample,
+# vs. 0 thinking tokens for gemini-3.5-flash-lite on the same page. This is
+# the actual dollar cost driver behind a model swap, not just the headline
+# per-token price -- hence logging it per call rather than only trusting the
+# sticker price. Keep in sync with https://ai.google.dev/gemini-api/docs/pricing
+# as Google adds/retires models or changes rates; an unlisted model just logs
+# token counts with no dollar estimate rather than a silently wrong number.
+_GEMINI_PRICING_USD_PER_MILLION: dict[str, tuple[float, float]] = {
+    "gemini-3-flash-preview": (0.50, 3.00),
+    "gemini-3.6-flash": (0.75, 3.75),
+    "gemini-3.5-flash": (1.50, 9.00),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+}
+
+
+def _log_gemini_usage(model: str, response: Any) -> None:
+    """Log token usage (and an estimated USD cost, when the model's pricing
+    is known) for one real Gemini call -- the only way to see the "thinking"
+    token cost a -preview/reasoning model can hide, since that's bundled into
+    the output token count rather than surfaced anywhere else. Best-effort:
+    silently does nothing if `response` has no usage_metadata (e.g. a test
+    double, or an SDK response shape change), never raises.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return
+    prompt_tokens = getattr(usage, "prompt_token_count", None) or 0
+    output_tokens = getattr(usage, "candidates_token_count", None) or 0
+    thinking_tokens = getattr(usage, "thoughts_token_count", None) or 0
+    total_tokens = getattr(usage, "total_token_count", None) or (prompt_tokens + output_tokens + thinking_tokens)
+
+    cost_note = ""
+    pricing = _GEMINI_PRICING_USD_PER_MILLION.get(model)
+    if pricing is not None:
+        input_price, output_price = pricing
+        estimated_cost_usd = (prompt_tokens / 1_000_000) * input_price + (
+            (output_tokens + thinking_tokens) / 1_000_000
+        ) * output_price
+        cost_note = f" est_cost_usd={estimated_cost_usd:.5f}"
+
+    LOGGER.info(
+        "gemini usage model=%s prompt_tokens=%d output_tokens=%d thinking_tokens=%d total_tokens=%d%s",
+        model,
+        prompt_tokens,
+        output_tokens,
+        thinking_tokens,
+        total_tokens,
+        cost_note,
+    )
+
 # These fields are absent from most Nikah ledger layouts -- only some rows/eras
 # show them at all. Only fill one in when the image genuinely shows a value;
 # leave it null otherwise, same as every other field (do not infer or guess).
@@ -168,11 +227,13 @@ class GeminiRecordExtractor:
         delay = self._initial_delay_seconds
         for attempt in range(1, self._api_attempts + 1):
             try:
-                return self._client.models.generate_content(
+                response = self._client.models.generate_content(
                     model=self.model,
                     contents=[prompt, image_part],
                     config=config,
                 )
+                _log_gemini_usage(self.model, response)
+                return response
             except genai_errors.APIError as error:
                 if attempt == self._api_attempts or error.code not in TRANSIENT_GEMINI_HTTP_CODES:
                     raise

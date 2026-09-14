@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from marriage_ocr.models import OcrResult
 from llm.gemini_extractor import GeminiRecordExtractor
-from llm.gemini_extractor import _resolve_api_key_source
+from llm.gemini_extractor import _log_gemini_usage, _resolve_api_key_source
 
 
 def test_payload_to_result_accepts_field_confidence_entries() -> None:
@@ -39,6 +39,56 @@ def test_resolve_api_key_source_prefers_config_then_env(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "env-key")
     assert _resolve_api_key_source({}) == ("GEMINI_API_KEY", "env-key")
     assert _resolve_api_key_source({"api_key": "config-key"}) == ("config.api_key", "config-key")
+
+
+def test_log_gemini_usage_reports_thinking_tokens_and_estimated_cost(caplog) -> None:
+    # Regression: a "-preview" reasoning model's thinking tokens are bundled
+    # into the output token count by Google's own billing (not a separate
+    # line item), and are otherwise invisible anywhere in this pipeline --
+    # confirmed against a real API call that they can dwarf the actual
+    # visible output (8,332 thinking vs. 1,681 visible tokens on one sample).
+    response = SimpleNamespace(
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=2130,
+            candidates_token_count=1681,
+            thoughts_token_count=8332,
+            total_token_count=12143,
+        )
+    )
+    with caplog.at_level("INFO"):
+        _log_gemini_usage("gemini-3-flash-preview", response)
+
+    assert "thinking_tokens=8332" in caplog.text
+    assert "total_tokens=12143" in caplog.text
+    # (2130/1e6 * 0.50) + ((1681 + 8332)/1e6 * 3.00) = 0.031104
+    assert "est_cost_usd=0.03110" in caplog.text
+
+
+def test_log_gemini_usage_omits_cost_for_an_unlisted_model(caplog) -> None:
+    # A confident wrong dollar estimate is worse than no estimate at all --
+    # an unrecognised/future model still logs real token counts, just no
+    # cost figure, rather than silently pricing it against the wrong model.
+    response = SimpleNamespace(
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=100,
+            candidates_token_count=50,
+            thoughts_token_count=None,
+            total_token_count=150,
+        )
+    )
+    with caplog.at_level("INFO"):
+        _log_gemini_usage("some-future-gemini-model", response)
+
+    assert "total_tokens=150" in caplog.text
+    assert "est_cost_usd" not in caplog.text
+
+
+def test_log_gemini_usage_is_a_silent_no_op_without_usage_metadata(caplog) -> None:
+    # Test doubles (and any real SDK response shape change) have no
+    # usage_metadata attribute at all -- must never raise.
+    with caplog.at_level("INFO"):
+        _log_gemini_usage("gemini-2.5-flash", SimpleNamespace(text="{}"))
+    assert caplog.text == ""
 
 
 def test_extract_record_uses_single_client(tmp_path: Path) -> None:
