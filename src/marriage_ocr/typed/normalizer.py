@@ -80,6 +80,13 @@ _LEADING_LABELS = {
     # that triggered that same self-erasure.
     "alamat_suami": re.compile(r"^\s*\(?\s*(alamat\s*){1,2}(rumah)?\s*:?\s*", re.IGNORECASE),
     "alamat_isteri": re.compile(r"^\s*\(?\s*(alamat\s*){1,2}(rumah)?\s*:?\s*", re.IGNORECASE),
+    # Typed Cerai/Rujuk's printed label is "Alamat (Rumah):" -- confirmed on
+    # real client samples, the field's own region boundary sometimes clips
+    # everything except the label's closing ") :" tail, leaving that bare
+    # fragment glued onto the front of the real address with no "alamat"
+    # text present at all for the pattern above to match against (e.g.
+    # ") : NO 11 , JLN SPEKTRUM U16 / 30 , ..."). See
+    # _ADDRESS_RUMAH_LABEL_TAIL_BLEED below, applied in _strip_label.
     "alamat_wali": re.compile(r"^\s*\(?\s*(alamat\s*){1,2}(pejabat)?\s*:?\s*", re.IGNORECASE),
     "tempat_nikah": re.compile(r"^\s*(tempat\s*:?\s*)", re.IGNORECASE),
     "pernikahan_kali": re.compile(r"^\s*(pernikahan\s*kali\s*:?\s*)", re.IGNORECASE),
@@ -285,6 +292,26 @@ _ADDRESS_STAMP_PREFIX = re.compile(
     r")\s*\)?\s*",
     re.IGNORECASE,
 )
+# Typed Cerai/Rujuk's printed "Alamat (Rumah):" label -- confirmed on real
+# client samples, the field's own region boundary sometimes clips everything
+# except the label's closing ") :" tail, leaving that bare fragment glued
+# onto the front of the real address with no "alamat" text present at all
+# (e.g. ") : NO 11 , JLN SPEKTRUM U16 / 30 , ..."), so the _LEADING_LABELS
+# pattern above (which requires the literal word "alamat") never matches.
+# Scoped to only alamat_isteri/alamat_suami in _strip_label (never applied
+# elsewhere) since a bare leading ") :" is this label's own specific tail,
+# not a generally-safe-to-strip shape on other fields.
+_ADDRESS_RUMAH_LABEL_TAIL_BLEED = re.compile(r"^\s*\)\s*:\s*")
+# "Tarikh masuk Islam (Jika mualaf):" and "No.kad perakuan Islam:" are the
+# next two printed labels immediately below alamat_isteri/alamat_suami on
+# the real Rujuk form -- confirmed on real client samples, the "Tarikh
+# masuk" lead-in gets clipped by this field's own region boundary, leaving
+# "Islam ( Jika mualaf ) : No.kad perakuan Islam :" bled onto the tail of
+# the real address. Scoped to only alamat_isteri/alamat_suami in
+# _strip_trailing_noise (never added to the generic _TRAILING_NOISE_PATTERN
+# keyword list) since a bare ISLAM keyword IS real content elsewhere, e.g.
+# alamat_pendaftar's "PEJABAT AGAMA ISLAM DAERAH ...".
+_ISLAM_LABEL_TAIL_BLEED = re.compile(r"\bislam\s*\(\s*jika\s*mualaf\s*\)\s*:?.*$", re.IGNORECASE)
 _LOCATION_NOISE = (
     "DAERAH",
     "SELANGOR",
@@ -542,6 +569,10 @@ def _strip_label(value: str, field_key: str) -> str:
         # chance to run and wipe the real street text that follows it on
         # the same line.
         result = _ADDRESS_STAMP_PREFIX.sub("", result, count=1)
+    if field_key in ("alamat_isteri", "alamat_suami"):
+        # See _ADDRESS_RUMAH_LABEL_TAIL_BLEED -- strips a bare leading
+        # ") :" tail of typed Cerai/Rujuk's own "Alamat (Rumah):" label.
+        result = _ADDRESS_RUMAH_LABEL_TAIL_BLEED.sub("", result, count=1)
     # A leading colon only -- not every colon in the string. masa_nikah's
     # value can itself contain one ("9:30 PM"); a blanket replace used to
     # turn that into "9 30 PM" whenever the label pattern above left a
@@ -558,6 +589,11 @@ def _strip_label(value: str, field_key: str) -> str:
 
 def _strip_trailing_noise(value: str, field_key: str | None = None) -> str:
     value = _TRAILING_NOISE_PATTERN.sub("", value).strip()
+    if field_key in ("alamat_isteri", "alamat_suami"):
+        # See _ISLAM_LABEL_TAIL_BLEED -- strips the next two fields' own
+        # bled-in labels ("Islam ( Jika mualaf ) : No.kad perakuan Islam :")
+        # from the tail of the real address.
+        value = _ISLAM_LABEL_TAIL_BLEED.sub("", value).strip()
     value = _TRAILING_SYMBOL_NOISE.sub("", value).strip()
     value = _TRAILING_BARE_NO_PATTERN.sub("", value).strip()
     # Skipped for no_siri itself -- "No <digits>" (or "No. Siri <digits>")
@@ -842,7 +878,25 @@ def normalize_wrapped_field(raw: str | None, *, field_key: str | None = None) ->
 # wraps across two or three printed lines on both Cerai and Rujuk modern
 # certs (confirmed against real samples) -- same multi-line join as
 # addresses, for the same reason.
-normalize_jawatan = normalize_remarks
+_JAWATAN_PENDAFTAR_TITLE_START = re.compile(r"\bpendaftar\b", re.IGNORECASE)
+
+
+def normalize_jawatan(raw: str | None) -> str | None:
+    """The jawatan_pendaftar region on real Cerai/Rujuk samples sometimes
+    also captures the registrar's own name sitting directly above or beside
+    the job-title text (confirmed on several real client samples, e.g.
+    "MOHD AZWAN BIN SELAMAT $ 3 Pendaftar Perkahwinan , Perceraian Dan Rujuk
+    Orang Islam") -- the real job title always starts with the word
+    "Pendaftar" ("Registrar"), so anything before its first occurrence in
+    the joined text is the bled-in name, never part of the real title.
+    """
+    joined = normalize_remarks(raw)
+    if joined is None:
+        return None
+    match = _JAWATAN_PENDAFTAR_TITLE_START.search(joined)
+    if match:
+        return joined[match.start():].strip(" ,") or None
+    return joined
 
 
 def _first_non_empty(values: Iterable[str | None]) -> str | None:
@@ -1106,10 +1160,10 @@ def _build_rujuk_record(raw_fields: dict[str, RawField], *, template_name: str) 
         bangsa_suami=normalize_plain_text(_raw(raw_fields, "bangsa_suami")),
         tarikh_lahir_suami=normalize_birth_year_or_date(_raw(raw_fields, "tarikh_lahir_suami")),
         warganegara_suami=normalize_plain_text(_raw(raw_fields, "warganegara_suami")),
-        alamat_suami=normalize_address(_raw(raw_fields, "alamat_suami")),
+        alamat_suami=normalize_wrapped_field(_raw(raw_fields, "alamat_suami"), field_key="alamat_suami"),
         alamat_pejabat_suami=normalize_address(_raw(raw_fields, "alamat_pejabat_suami")),
         pekerjaan_suami=normalize_plain_text(_raw(raw_fields, "pekerjaan_suami")),
-        tarikh_masuk_islam_suami=normalize_plain_text(_raw(raw_fields, "tarikh_masuk_islam_suami")),
+        tarikh_masuk_islam_suami=normalize_date_preserving_style(_raw(raw_fields, "tarikh_masuk_islam_suami")),
         no_kad_perakuan_islam_suami=normalize_plain_text(_raw(raw_fields, "no_kad_perakuan_islam_suami")),
         nama_isteri=normalize_name(_raw(raw_fields, "nama_isteri"), field_key="nama_isteri"),
         ic_isteri=ic_baru_isteri or ic_lama_isteri,
@@ -1117,10 +1171,10 @@ def _build_rujuk_record(raw_fields: dict[str, RawField], *, template_name: str) 
         bangsa_isteri=normalize_plain_text(_raw(raw_fields, "bangsa_isteri")),
         tarikh_lahir_isteri=normalize_birth_year_or_date(_raw(raw_fields, "tarikh_lahir_isteri")),
         warganegara_isteri=normalize_plain_text(_raw(raw_fields, "warganegara_isteri")),
-        alamat_isteri=normalize_address(_raw(raw_fields, "alamat_isteri")),
+        alamat_isteri=normalize_wrapped_field(_raw(raw_fields, "alamat_isteri"), field_key="alamat_isteri"),
         alamat_pejabat_isteri=normalize_address(_raw(raw_fields, "alamat_pejabat_isteri")),
         pekerjaan_isteri=normalize_plain_text(_raw(raw_fields, "pekerjaan_isteri")),
-        tarikh_masuk_islam_isteri=normalize_plain_text(_raw(raw_fields, "tarikh_masuk_islam_isteri")),
+        tarikh_masuk_islam_isteri=normalize_date_preserving_style(_raw(raw_fields, "tarikh_masuk_islam_isteri")),
         no_kad_perakuan_islam_isteri=normalize_plain_text(_raw(raw_fields, "no_kad_perakuan_islam_isteri")),
         tempat_rujuk=normalize_plain_text(_raw(raw_fields, "tempat_rujuk")),
         rujuk_kali=normalize_plain_text(_raw(raw_fields, "rujuk_kali")),

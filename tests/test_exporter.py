@@ -92,6 +92,56 @@ def test_exporter_drops_nikah_only_duplicate_columns() -> None:
     assert removed_columns.isdisjoint(EXPORT_COLUMN_TO_FIELD)
 
 
+def test_exporter_drops_globally_unused_raw_columns() -> None:
+    # Per explicit client request -- these "*Raw" columns were 100% empty
+    # across every record type (already stripped at import time by
+    # marriage-be's "any column starting/ending with Raw" filter, so they
+    # never survived into a displayed record either way).
+    removed_columns = {"IC Suami Raw", "IC Isteri Raw", "Tarikh Cerai Raw", "Tarikh Rujuk Raw", "Catatan Raw"}
+    assert removed_columns.isdisjoint(XLSX_COLUMNS)
+    assert removed_columns.isdisjoint(EXPORT_COLUMN_TO_FIELD)
+
+
+def test_exporter_drops_rujuk_only_column() -> None:
+    # Tempat Rujuk had no other record type's data in it -- per explicit
+    # client request, removed entirely rather than blanked per-type.
+    assert "Tempat Rujuk" not in XLSX_COLUMNS
+    assert "Tempat Rujuk" not in EXPORT_COLUMN_TO_FIELD
+
+
+def test_exporter_blanks_shared_cerai_fields_on_rujuk_rows() -> None:
+    # No Rujukan / No Siri / No Telefon are real, populated columns for
+    # other record types (No Rujukan/No Telefon mostly for Cerai; No Siri
+    # for Nikah's legacy cert stamp too) -- shared in this one column list,
+    # so removing them outright would break Cerai/Nikah. Per explicit
+    # client request, Rujuk rows specifically must never show a value in
+    # these cells even when the underlying field is populated.
+    rujuk_record = replace(
+        _make_record(source_record="rujuk_001"),
+        record_type="RUJUK",
+        no_rujukan="12/2020",
+        no_siri="654321",
+        no_telefon="0123456789",
+    )
+    cerai_record = replace(
+        _make_record(source_record="cerai_001"),
+        record_type="CERAI",
+        no_rujukan="34/2020",
+        no_siri="123456",
+        no_telefon="0198765432",
+    )
+
+    rujuk_row = record_to_export_dict(rujuk_record, timestamp="2026-05-25T12:00:00")
+    cerai_row = record_to_export_dict(cerai_record, timestamp="2026-05-25T12:00:00")
+
+    assert rujuk_row["No Rujukan"] is None
+    assert rujuk_row["No Siri"] is None
+    assert rujuk_row["No Telefon"] is None
+    assert cerai_row["No Rujukan"] == "34/2020"
+    assert cerai_row["No Siri"] == "123456"
+    assert cerai_row["No Telefon"] == "0198765432"
+
+
 def test_exporter_can_show_public_columns_only(tmp_path: Path) -> None:
     output_path = tmp_path / "records.xlsx"
     record = _make_record(source_record="record_001")

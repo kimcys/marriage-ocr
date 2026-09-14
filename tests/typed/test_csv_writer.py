@@ -218,6 +218,78 @@ def test_typed_csv_blanks_shared_cerai_rujuk_fields_on_nikah_rows(tmp_path: Path
     assert rows["cerai.pdf"]["Jumlah Bayaran"] == "RM 5"
 
 
+def test_typed_csv_drops_rujuk_only_or_globally_unused_columns() -> None:
+    # Per explicit client request -- Tempat Rujuk was Rujuk-only (with no
+    # other type using it) and No Kad Perakuan Islam Suami/Isteri were
+    # globally unpopulated across every typed record type, so both were
+    # removed from the schema entirely rather than blanked per-type.
+    removed_columns = {"Tempat Rujuk", "No Kad Perakuan Islam Suami", "No Kad Perakuan Islam Isteri"}
+    assert removed_columns.isdisjoint(TYPED_CSV_COLUMNS)
+
+
+def test_typed_csv_blanks_shared_nikah_cerai_fields_on_rujuk_rows(tmp_path: Path) -> None:
+    # No Siri / Pekerjaan Suami-Isteri / Tempat Nikah Daerah-Negeri /
+    # Jumlah Bayaran are real, populated columns for other typed record
+    # types (No Siri for Nikah's legacy cert stamp; the rest for Cerai) --
+    # shared in this one column list, so removing them outright would break
+    # Nikah/Cerai. Per explicit client request, Rujuk rows specifically must
+    # never show a value in these cells even when the underlying field is
+    # populated.
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(
+                record_type="RUJUK",
+                bil="01/2009",
+                nama_suami="A, BIN B",
+                no_siri="123456",
+                pekerjaan_suami="PENIAGA",
+                pekerjaan_isteri="SURI RUMAH",
+                tempat_nikah_daerah="PETALING",
+                tempat_nikah_negeri="SELANGOR",
+                jumlah_bayaran="RM 5",
+            ),
+            source_file="rujuk.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(
+                record_type="CERAI",
+                bil="02/2009",
+                nama_suami="C, BIN D",
+                no_siri="654321",
+                pekerjaan_suami="PENIAGA",
+                pekerjaan_isteri="SURI RUMAH",
+                tempat_nikah_daerah="PETALING",
+                tempat_nikah_negeri="SELANGOR",
+                jumlah_bayaran="RM 5",
+            ),
+            source_file="cerai.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        rows = {row["Source File"]: row for row in csv.DictReader(handle)}
+
+    assert rows["rujuk.pdf"]["No Siri"] == ""
+    assert rows["rujuk.pdf"]["Pekerjaan Suami"] == ""
+    assert rows["rujuk.pdf"]["Pekerjaan Isteri"] == ""
+    assert rows["rujuk.pdf"]["Tempat Nikah Daerah"] == ""
+    assert rows["rujuk.pdf"]["Tempat Nikah Negeri"] == ""
+    assert rows["rujuk.pdf"]["Jumlah Bayaran"] == ""
+    assert rows["cerai.pdf"]["No Siri"] == "654321"
+    assert rows["cerai.pdf"]["Pekerjaan Suami"] == "PENIAGA"
+    assert rows["cerai.pdf"]["Pekerjaan Isteri"] == "SURI RUMAH"
+    assert rows["cerai.pdf"]["Tempat Nikah Daerah"] == "PETALING"
+    assert rows["cerai.pdf"]["Tempat Nikah Negeri"] == "SELANGOR"
+    assert rows["cerai.pdf"]["Jumlah Bayaran"] == "RM 5"
+
+
 def test_blank_umur_shows_tiada_maklumat_on_nikah_modern_rows(tmp_path: Path) -> None:
     # Real client samples print "T. MAKLUMAT" (Tiada Maklumat / "no
     # information") directly on the form for a wali whose age genuinely

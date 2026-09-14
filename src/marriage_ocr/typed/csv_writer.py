@@ -60,8 +60,6 @@ TYPED_CSV_COLUMNS = [
     "Pekerjaan Isteri",
     "Tarikh Masuk Islam Suami",
     "Tarikh Masuk Islam Isteri",
-    "No Kad Perakuan Islam Suami",
-    "No Kad Perakuan Islam Isteri",
     "Bil Daftar Nikah",
     "Bil Daftar Rujuk Asal",
     "Tarikh Rujuk",
@@ -82,7 +80,6 @@ TYPED_CSV_COLUMNS = [
     "Cerai Dalam Keadaan",
     "No Sijil Perakuan Nikah Rujuk",
     "No Permohonan Cerai",
-    "Tempat Rujuk",
     "Bil Cerai",
     "Rujuk Kali",
     "Jawatan Pendaftar",
@@ -140,6 +137,26 @@ def _value_unless_nikah(value: object | None, *, record_type: str) -> str:
     return _value(value)
 
 
+# No Siri / Pekerjaan Suami-Isteri / Tempat Nikah Daerah-Negeri are real,
+# populated fields for other typed record types (No Siri for Nikah's legacy
+# cert stamp; the rest for Cerai) -- per explicit client request, this
+# blanks them for Rujuk specifically without dropping the column entirely
+# and losing that other data.
+def _value_unless_rujuk(value: object | None, *, record_type: str) -> str:
+    if record_type == "RUJUK":
+        return ""
+    return _value(value)
+
+
+# Jumlah Bayaran is real for typed Cerai but, per explicit client request,
+# pure clutter for both Nikah (see _value_unless_nikah's own docstring) and
+# Rujuk.
+def _value_unless_nikah_or_rujuk(value: object | None, *, record_type: str) -> str:
+    if record_type in ("NIKAH", "RUJUK"):
+        return ""
+    return _value(value)
+
+
 def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
     record = result.record
     # Umur Suami/Isteri/Wali and IC Wali only structurally exist on typed
@@ -177,7 +194,7 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Tarikh Nikah": _value(record.tarikh_nikah),
         "Tarikh Nikah Hijri": _value(record.tarikh_nikah_hijri),
         "Tarikh Keluar": _value(record.tarikh_keluar),
-        "No Siri": _value(record.no_siri),
+        "No Siri": _value_unless_rujuk(record.no_siri, record_type=record.record_type),
         "Hari Nikah": _value(record.hari_nikah),
         "Masa Nikah": _value(record.masa_nikah),
         "Tempat Nikah": _value(record.tempat_nikah),
@@ -198,12 +215,10 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Alamat Isteri": _value(record.alamat_isteri),
         "Alamat Pejabat Suami": _value(record.alamat_pejabat_suami),
         "Alamat Pejabat Isteri": _value(record.alamat_pejabat_isteri),
-        "Pekerjaan Suami": _value(record.pekerjaan_suami),
-        "Pekerjaan Isteri": _value(record.pekerjaan_isteri),
+        "Pekerjaan Suami": _value_unless_rujuk(record.pekerjaan_suami, record_type=record.record_type),
+        "Pekerjaan Isteri": _value_unless_rujuk(record.pekerjaan_isteri, record_type=record.record_type),
         "Tarikh Masuk Islam Suami": _value(record.tarikh_masuk_islam_suami),
         "Tarikh Masuk Islam Isteri": _value(record.tarikh_masuk_islam_isteri),
-        "No Kad Perakuan Islam Suami": _value(record.no_kad_perakuan_islam_suami),
-        "No Kad Perakuan Islam Isteri": _value(record.no_kad_perakuan_islam_isteri),
         "Bil Daftar Nikah": _value(record.bil_daftar_nikah),
         "Bil Daftar Rujuk Asal": _value(record.bil_daftar_rujuk_asal),
         "Tarikh Rujuk": _value(record.tarikh_rujuk),
@@ -213,8 +228,8 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Tarikh Daftar": _value(record.tarikh_daftar),
         "Tarikh Daftar Hijri": _value(record.tarikh_daftar_hijri),
         "Bilangan Kes Mal": _value(record.bilangan_kes_mal),
-        "Tempat Nikah Daerah": _value(record.tempat_nikah_daerah),
-        "Tempat Nikah Negeri": _value(record.tempat_nikah_negeri),
+        "Tempat Nikah Daerah": _value_unless_rujuk(record.tempat_nikah_daerah, record_type=record.record_type),
+        "Tempat Nikah Negeri": _value_unless_rujuk(record.tempat_nikah_negeri, record_type=record.record_type),
         "Talak Kali Ke": _value(record.talak_kali_ke),
         "Jumlah Talak": _value(record.jumlah_talak),
         "Keadaan Talak": _value(record.keadaan_talak),
@@ -224,11 +239,10 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Cerai Dalam Keadaan": _value(record.cerai_dalam_keadaan),
         "No Sijil Perakuan Nikah Rujuk": _value(record.no_sijil_perakuan_nikah_rujuk),
         "No Permohonan Cerai": _value(record.no_permohonan_cerai),
-        "Tempat Rujuk": _value(record.tempat_rujuk),
         "Bil Cerai": _value(record.bil_cerai),
         "Rujuk Kali": _value(record.rujuk_kali),
         "Jawatan Pendaftar": _value(record.jawatan_pendaftar),
-        "Jumlah Bayaran": _value_unless_nikah(record.jumlah_bayaran, record_type=record.record_type),
+        "Jumlah Bayaran": _value_unless_nikah_or_rujuk(record.jumlah_bayaran, record_type=record.record_type),
         "Hal Hal Lain": _value(record.hal_hal_lain),
         "Source File": result.source_file,
         "Processing Status": result.processing_status.value,

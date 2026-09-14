@@ -7,6 +7,7 @@ from marriage_ocr.typed.normalizer import (
     normalize_bil,
     normalize_date_preserving_style,
     normalize_ic,
+    normalize_jawatan,
     normalize_mas_kahwin,
     normalize_plain_text,
     normalize_wrapped_field,
@@ -523,3 +524,84 @@ def test_alamat_wali_recovers_a_street_when_the_stamp_blocks_its_own_label() -> 
         )
         == "LUBUK BAKAK D5 PADANG CERMIN LAMPUNG SELATAN , BANDAR LAMPUNG , INDONESIA ."
     )
+
+
+def test_alamat_isteri_strips_a_bare_rumah_label_tail_bleed_and_islam_label_bleed() -> None:
+    # Regression: confirmed on real client typed-Rujuk samples (records-
+    # typed.csv), the printed "Alamat (Rumah):" label's own region boundary
+    # clips everything except its closing ") :" tail, which then bled onto
+    # the front of the real address -- and the following field's own label
+    # ("Tarikh masuk Islam (Jika mualaf):" / "No.kad perakuan Islam:") bled
+    # onto its tail, with no "alamat"/"tarikh masuk islam" text present for
+    # the existing leading/trailing patterns to recognise.
+    assert (
+        normalize_wrapped_field(
+            ") : NO 11 , JLN SPEKTRUM U16 / 30 , SEKSYEN U16 , TMN BUKIT SUBANG , "
+            "40160 SELANGOR Islam ( Jika mualaf ) : No.kad perakuan Islam :",
+            field_key="alamat_isteri",
+        )
+        == "NO 11 , JLN SPEKTRUM U16 / 30 , SEKSYEN U16 , TMN BUKIT SUBANG , 40160 SELANGOR"
+    )
+
+
+def test_alamat_suami_strips_a_bare_rumah_label_tail_bleed() -> None:
+    assert (
+        normalize_wrapped_field(") : NO 3-513 BLOK 3 , JALAN MATAHARI U5 / 117 , BDR PINGGIRAN SUBANG ,\nSHAH ALAM , SELANGOR", field_key="alamat_suami")
+        == "NO 3-513 BLOK 3 , JALAN MATAHARI U5 / 117 , BDR PINGGIRAN SUBANG SHAH ALAM , SELANGOR"
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # Regression: confirmed on real client typed-Rujuk samples
+        # (records-typed.csv), the registrar's own name sits directly in
+        # front of the real job title within the same captured region.
+        (
+            "MOHD AZWAN BIN SELAMAT $ 3 Pendaftar Perkahwinan , Perceraian Dan Rujuk Orang Islam",
+            "Pendaftar Perkahwinan , Perceraian Dan Rujuk Orang Islam",
+        ),
+        (
+            "MOHD KHAIRIL NIZAM BIN JALUDIN Pendaftar Perkahwinan , Perceraian Dan Rujuk Orang Islam",
+            "Pendaftar Perkahwinan , Perceraian Dan Rujuk Orang Islam",
+        ),
+        (
+            "SUHAIMI BIN AHMAD WAKID Pendaftar Elwinan , Perceraian Dan Rujuk Orang Islam Daerah Petaling",
+            "Pendaftar Elwinan , Perceraian Dan Rujuk Orang Islam Daerah Petaling",
+        ),
+        # No name bled in at all -- left unchanged.
+        ("Pendaftar Perkahwinan , Perceraian Dan Rujuk Orang Islam", "Pendaftar Perkahwinan , Perceraian Dan Rujuk Orang Islam"),
+    ],
+)
+def test_normalize_jawatan_excludes_the_registrars_name(raw: str, expected: str) -> None:
+    assert normalize_jawatan(raw) == expected
+
+
+def test_normalize_jawatan_falls_back_to_full_text_when_pendaftar_keyword_is_missing() -> None:
+    # No "Pendaftar" keyword anywhere to anchor on -- nothing safe to trim,
+    # so the joined text is returned as-is rather than guessing.
+    assert normalize_jawatan("PEJABAT AGAMA ISLAM DAERAH PETALING") == "PEJABAT AGAMA ISLAM DAERAH PETALING"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # Regression: confirmed on real client typed-Rujuk samples
+        # (records-typed.csv), Tarikh Masuk Islam should be genuinely empty
+        # for the vast majority of non-mualaf spouses, but the printed
+        # "Tarikh masuk Islam (Jika mualaf):" label's own leading words get
+        # clipped by the field's region boundary, leaving just this bare
+        # punctuation tail behind -- which used to survive as if it were a
+        # real value since normalize_plain_text was called with no
+        # field_key (so no label-stripping ever applied) and the placeholder
+        # pattern doesn't recognise parentheses as junk.
+        ") :",
+        "( ) :",
+    ],
+)
+def test_tarikh_masuk_islam_rejects_non_date_bleed(raw: str) -> None:
+    assert normalize_date_preserving_style(raw) is None
+
+
+def test_tarikh_masuk_islam_accepts_a_real_date() -> None:
+    assert normalize_date_preserving_style("05-01-1960") == "05-01-1960"

@@ -57,21 +57,15 @@ XLSX_COLUMNS = [
     "No Siri",
     "Tarikh Daftar",
     "IC Suami",
-    "IC Suami Raw",
     "IC Isteri",
-    "IC Isteri Raw",
     "Tempat Cerai",
     "Keadaan Talak",
     "Jumlah Talak",
     "Tarikh Cerai",
-    "Tarikh Cerai Raw",
     "Bil Daftar Rujukan",
-    "Tempat Rujuk",
     "Bil Cerai",
     "Rujuk Kali",
     "Tarikh Rujuk",
-    "Tarikh Rujuk Raw",
-    "Catatan Raw",
     "Hal Hal Lain",
     "No Telefon",
     "Record Type",
@@ -183,21 +177,15 @@ EXPORT_COLUMN_TO_FIELD = {
     "No Siri": "no_siri",
     "Tarikh Daftar": "tarikh_daftar",
     "IC Suami": "ic_suami",
-    "IC Suami Raw": "ic_suami_raw",
     "IC Isteri": "ic_isteri",
-    "IC Isteri Raw": "ic_isteri_raw",
     "Tempat Cerai": "tempat_cerai",
     "Keadaan Talak": "keadaan_talak",
     "Jumlah Talak": "jumlah_talak",
     "Tarikh Cerai": "tarikh_cerai",
-    "Tarikh Cerai Raw": "tarikh_cerai_raw",
     "Bil Daftar Rujukan": "bil_daftar_rujukan",
-    "Tempat Rujuk": "tempat_rujuk",
     "Bil Cerai": "bil_cerai",
     "Rujuk Kali": "rujuk_kali",
     "Tarikh Rujuk": "tarikh_rujuk",
-    "Tarikh Rujuk Raw": "tarikh_rujuk_raw",
-    "Catatan Raw": "catatan_raw",
     "Hal Hal Lain": "hal_hal_lain",
     "No Telefon": "no_telefon",
     "Record Type": "record_type",
@@ -503,6 +491,17 @@ def record_from_export_dict(data: Mapping[str, Any]) -> ExtractedRecord:
     return ExtractedRecord(**payload)
 
 
+def _unless_rujuk(value: Any, *, record_type: Any) -> Any:
+    # No Rujukan/No Siri/No Telefon are real, populated fields for other
+    # record types (No Rujukan/No Siri especially for Cerai; No Siri also
+    # for Nikah's legacy cert stamp) -- per explicit client request, this
+    # blanks them for Rujuk specifically without dropping the column
+    # entirely and losing that other data.
+    if record_type == "RUJUK":
+        return None
+    return value
+
+
 def _record_to_row(record: ExtractedRecord) -> list[Any]:
     return [
         record.bil,
@@ -541,27 +540,21 @@ def _record_to_row(record: ExtractedRecord) -> list[Any]:
         record.belanja_hantaran,
         record.umur_wali,
         record.alamat_wali,
-        record.no_rujukan,
-        record.no_siri,
+        _unless_rujuk(record.no_rujukan, record_type=record.record_type),
+        _unless_rujuk(record.no_siri, record_type=record.record_type),
         record.tarikh_daftar,
         record.ic_suami,
-        record.ic_suami_raw,
         record.ic_isteri,
-        record.ic_isteri_raw,
         record.tempat_cerai,
         record.keadaan_talak,
         record.jumlah_talak,
         record.tarikh_cerai,
-        record.tarikh_cerai_raw,
         record.bil_daftar_rujukan,
-        record.tempat_rujuk,
         record.bil_cerai,
         record.rujuk_kali,
         record.tarikh_rujuk,
-        record.tarikh_rujuk_raw,
-        record.catatan_raw,
         record.hal_hal_lain,
-        record.no_telefon,
+        _unless_rujuk(record.no_telefon, record_type=record.record_type),
         record.record_type,
         record.confidence,
         record.status_review,
