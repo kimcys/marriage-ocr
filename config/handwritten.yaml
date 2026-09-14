@@ -83,7 +83,7 @@ ocr:
 llm:
   enabled: true
   provider: gemini
-  model: gemini-3-flash-preview
+  model: gemini-3.5-flash-lite
   prompt_mode: handwritten_aggressive
   temperature: 0.0
   max_output_tokens: 4096
