@@ -108,17 +108,13 @@ export:
   columns:
     - Record Type
     - Bil
-    - No Rujukan
-    - No Siri
     - Tarikh Daftar
     - Nama Suami
-    - Umur Suami
     - IC Suami
     - Bangsa Suami
     - Warganegara Suami
     - Alamat Suami
     - Nama Isteri
-    - Umur Isteri
     - IC Isteri
     - Bangsa Isteri
     - Warganegara Isteri
@@ -131,11 +127,7 @@ export:
     - Jumlah Talak
     - Tarikh Nikah
     - Tarikh Cerai
-    - Bil Daftar Rujukan
-    - Tarikh Keluar
-    - Catatan Raw
     - Hal Hal Lain
-    - No Telefon
     - Confidence
     - Status
 

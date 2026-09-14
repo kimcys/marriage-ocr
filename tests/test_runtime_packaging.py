@@ -95,12 +95,8 @@ def test_handwritten_config_uses_cell_crops_and_public_export() -> None:
         "Pernikahan Kali",
         "Isteri Ke",
         "Belanja Hantaran",
-        "Pemberian Lain (Jika Ada)",
-        "No Kad Pengenalan/Passport Wali",
         "Umur Wali",
         "Alamat Wali",
-        "Kad Pengenalan/Passport Saksi 1",
-        "Kad Pengenalan/Passport Saksi 2",
         "Confidence",
         "Status",
     ]
