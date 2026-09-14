@@ -56,6 +56,15 @@ _LEADING_LABELS = {
     # that keyword wiped this field's own correctly-labelled value to
     # nothing, the same self-erasure already fixed for no_siri/nama_pendaftar.
     "tarikh_nikah_hijri": re.compile(r"^\s*(tarikh\s*nikah\s*(hijrah)?\s*:?\s*(hijrah\s*:?\s*)?)", re.IGNORECASE),
+    # Cerai/Rujuk's own "Tarikh Daftar/Cerai/Rujuk : Hijrah <date> Masihi
+    # <date>" row -- same self-erasure bug already fixed for tarikh_nikah_
+    # hijri above: a bare "HIJRAH" is also a generic _TRAILING_NOISE_PATTERN
+    # keyword (added to strip *bleed* of this label into OTHER fields), so
+    # without stripping it here first, that keyword wiped this field's own
+    # correctly-labelled value ("Hijrah 27 RAMADHAN 1431") down to nothing.
+    "tarikh_daftar_hijri": re.compile(r"^\s*(tarikh\s*daftar\s*:?\s*)?(hijrah\s*:?\s*)", re.IGNORECASE),
+    "tarikh_cerai_hijri": re.compile(r"^\s*(tarikh\s*(ber)?cerai\s*:?\s*)?(hijrah\s*:?\s*)", re.IGNORECASE),
+    "tarikh_rujuk_hijri": re.compile(r"^\s*(tarikh\s*rujuk\s*:?\s*)?(hijrah\s*:?\s*)", re.IGNORECASE),
     "alamat_pendaftar": re.compile(r"^\s*(alamat\s*:?\s*)", re.IGNORECASE),
     "mas_kahwin": re.compile(r"^\s*(mas\s*kahwin\s*:?\s*)", re.IGNORECASE),
     # Added for typed Nikah's legacy/modern split -- these fields are new
@@ -95,6 +104,15 @@ _LEADING_LABELS = {
     # mid-label at bare "ke :" with "Isteri" left on the line above, so the
     # full-phrase-only pattern never matched at all.
     "isteri_ke": re.compile(r"^\s*((isteri\s*)?ke\s*:?\s*)", re.IGNORECASE),
+    # Cerai's "Kali Ke :" label -- confirmed on a real client sample that
+    # this field's own region boundary clips "Kali", leaving a bare "ke :"
+    # tail glued onto the front of the real ordinal ("ke : PERTAMA ( 1 )").
+    "talak_kali_ke": re.compile(r"^\s*((kali\s*)?ke\s*:?\s*)", re.IGNORECASE),
+    # Cerai's "Jumlah Talak :" label -- confirmed on a real client sample
+    # that this field's own region boundary clips "Jumlah", leaving a bare
+    # "Talaq :" tail glued onto the front of the real cardinal ("Talaq :
+    # SATU"). ("Talaq" -- this form's own spelling variant, not "Talak".)
+    "jumlah_talak": re.compile(r"^\s*((jumlah\s*)?tala[kq]\s*:?\s*)", re.IGNORECASE),
     # No literal "hari"/"masa" text precedes these on a bled-in continuation
     # line (e.g. "1441 Hari : JUMAAT") -- non-greedy so it also strips a
     # neighbouring field's tail sitting in front of the real label.
@@ -294,14 +312,16 @@ _ADDRESS_STAMP_PREFIX = re.compile(
 )
 # Typed Cerai/Rujuk's printed "Alamat (Rumah):" label -- confirmed on real
 # client samples, the field's own region boundary sometimes clips everything
-# except the label's closing ") :" tail, leaving that bare fragment glued
-# onto the front of the real address with no "alamat" text present at all
-# (e.g. ") : NO 11 , JLN SPEKTRUM U16 / 30 , ..."), so the _LEADING_LABELS
-# pattern above (which requires the literal word "alamat") never matches.
-# Scoped to only alamat_isteri/alamat_suami in _strip_label (never applied
-# elsewhere) since a bare leading ") :" is this label's own specific tail,
+# except the label's closing "Rumah ) :" or bare ") :" tail (the "Rumah"
+# word itself sometimes survives, sometimes doesn't -- confirmed both ways
+# across different samples), leaving that fragment glued onto the front of
+# the real address with no "alamat" text present at all (e.g. ") : NO 11 ,
+# JLN SPEKTRUM U16 / 30 , ..." / "Rumah ) : NO 28 JALAN 2B ..."), so the
+# _LEADING_LABELS pattern above (which requires the literal word "alamat")
+# never matches. Scoped to only alamat_isteri/alamat_suami in _strip_label
+# (never applied elsewhere) since this is this label's own specific tail,
 # not a generally-safe-to-strip shape on other fields.
-_ADDRESS_RUMAH_LABEL_TAIL_BLEED = re.compile(r"^\s*\)\s*:\s*")
+_ADDRESS_RUMAH_LABEL_TAIL_BLEED = re.compile(r"^\s*(?:rumah\s*)?\)\s*:\s*", re.IGNORECASE)
 # "Tarikh masuk Islam (Jika mualaf):" and "No.kad perakuan Islam:" are the
 # next two printed labels immediately below alamat_isteri/alamat_suami on
 # the real Rujuk form -- confirmed on real client samples, the "Tarikh
@@ -312,6 +332,40 @@ _ADDRESS_RUMAH_LABEL_TAIL_BLEED = re.compile(r"^\s*\)\s*:\s*")
 # keyword list) since a bare ISLAM keyword IS real content elsewhere, e.g.
 # alamat_pendaftar's "PEJABAT AGAMA ISLAM DAERAH ...".
 _ISLAM_LABEL_TAIL_BLEED = re.compile(r"\bislam\s*\(\s*jika\s*mualaf\s*\)\s*:?.*$", re.IGNORECASE)
+# Typed Cerai's own "Pekerjaan (Suami/Isteri):" row sits directly below
+# alamat_isteri/alamat_suami -- confirmed on several real client samples,
+# its printed label gets clipped the same way (leaving just a bare ":" or
+# "." separator) and the real occupation VALUE itself (free text, no fixed
+# keyword to match on, e.g. "PEGAWAI PENTADBIRAN" / "BEKERJA SENDIRI") bleeds
+# onto the tail of the address. Unlike _ISLAM_LABEL_TAIL_BLEED, there's no
+# fixed label text to anchor on here -- instead this recognises that a real
+# Malaysian address on this form always ENDS in a state/federal-territory
+# name (confirmed across every sample seen), so anything after one of those
+# names, separated by ":" or ".", is always this bled-in next-field value,
+# never more of the real address itself.
+_MALAYSIAN_STATE_NAMES = (
+    "WILAYAH PERSEKUTUAN", "KUALA LUMPUR", "PUTRAJAYA", "LABUAN",
+    "SELANGOR", "DARUL EHSAN",
+    "JOHOR", "DARUL TAKZIM",
+    "KEDAH", "DARUL AMAN",
+    "KELANTAN", "DARUL NAIM",
+    "MELAKA",
+    "NEGERI SEMBILAN", "DARUL KHUSUS",
+    "PAHANG", "DARUL MAKMUR",
+    "PERAK", "DARUL RIDZUAN",
+    "PERLIS", "INDERA KAYANGAN",
+    "PULAU PINANG", "PENANG",
+    "SABAH",
+    "SARAWAK",
+    "TERENGGANU", "DARUL IMAN",
+)
+_ADDRESS_STATE_NAME_ALTERNATION = "|".join(
+    re.escape(name) for name in sorted(_MALAYSIAN_STATE_NAMES, key=len, reverse=True)
+)
+_ADDRESS_NEXT_FIELD_TAIL_BLEED = re.compile(
+    rf"\b((?:{_ADDRESS_STATE_NAME_ALTERNATION}))\b\s*[:.]\s*[A-Za-z][A-Za-z\s]*$",
+    re.IGNORECASE,
+)
 _LOCATION_NOISE = (
     "DAERAH",
     "SELANGOR",
@@ -471,12 +525,25 @@ def normalize_date_preserving_style(raw: str | None) -> str | None:
 _YEAR_ONLY_PATTERN = re.compile(r"^(1[89]\d{2}|20\d{2})$")
 
 
+_TARIKH_LAHIR_LABEL = re.compile(r"^\s*(tarikh\s*)?lahir\s*:?\s*", re.IGNORECASE)
+
+
 def normalize_birth_year_or_date(raw: str | None) -> str | None:
     """Legacy Cerai/Rujuk certs (Borang 5/9) record only the birth *year* for
     Tarikh Lahir -- confirmed against real samples -- unlike every other
     date field on these forms, which is a full day.month.year. A bare year
     doesn't match generate_date_candidates's day/month/year parser, so fall
     back to accepting it verbatim rather than silently losing the data."""
+    # Strip this field's own "Lahir :" label before date-parsing -- confirmed
+    # on a real Cerai client sample ("Lahir : 30-06-1949 .") that leaving it
+    # in place corrupts generate_date_candidates' own OCR-digit-confusion
+    # step (L/I both map to "1" there), splitting "LAHIR" into extra bogus
+    # digit groups that make the real date fail to parse as day.month.year
+    # at all -- not just get outscored, actively unrecognised.
+    if raw is not None:
+        raw = "\n".join(
+            _TARIKH_LAHIR_LABEL.sub("", part) for part in str(raw).splitlines()
+        )
     date_value = normalize_date_preserving_style(raw)
     if date_value is not None:
         return date_value
@@ -540,6 +607,19 @@ _LEADING_PAGE_SECTION_HEADER = re.compile(
     r"^\s*[a-d]\s*\.?\s*-?\s*(maklumat\s+pasangan|maklumat\s+wali|maklumat\s+saksi|butir\s*-?\s*butir\s+pernikahan)\s*",
     re.IGNORECASE,
 )
+# Typed Cerai modern's own "Pernikahan : Daerah : <daerah> Negeri / Negara :
+# <negeri>" administrative header (confirmed on several real client samples,
+# printed directly above nama_suami's own row) bleeds in as a whole line
+# ahead of the real name -- e.g. "Pernikahan : Daerah : WILAYAH PERSEKUTUAN
+# Negeri / Negara : KUALA LUMPUR" -- and, being longer than most real names,
+# wins nama_suami's plain word-count scoring outright with no field-specific
+# bonus to prefer the real name instead. Never real content for any field
+# (same reasoning as _LEADING_PAGE_SECTION_HEADER above), so the whole line
+# is dropped unconditionally rather than gated to nama_suami specifically.
+_PERNIKAHAN_LOCATION_HEADER_LINE = re.compile(
+    r"^\s*pernikahan\s*:?\s*daerah\s*:?\s*.*?negeri\s*/?\s*negara\s*:?\s*.*$",
+    re.IGNORECASE,
+)
 
 
 def _strip_label(value: str, field_key: str) -> str:
@@ -551,6 +631,7 @@ def _strip_label(value: str, field_key: str) -> str:
     # field, so it comes off unconditionally rather than per-field.
     result = _LEADING_SECTION_NUMBER.sub("", value)
     result = _LEADING_PAGE_SECTION_HEADER.sub("", result)
+    result = _PERNIKAHAN_LOCATION_HEADER_LINE.sub("", result)
     # A printed fill-in blank ("......... Bangsa : MELAYU") can sit BEFORE
     # the field's own label, not just after it -- e.g. isteri's row prints
     # a checkbox-style "*" placeholder ahead of "Umur", and once that's
@@ -594,6 +675,9 @@ def _strip_trailing_noise(value: str, field_key: str | None = None) -> str:
         # bled-in labels ("Islam ( Jika mualaf ) : No.kad perakuan Islam :")
         # from the tail of the real address.
         value = _ISLAM_LABEL_TAIL_BLEED.sub("", value).strip()
+        # See _ADDRESS_NEXT_FIELD_TAIL_BLEED -- strips typed Cerai's own
+        # bled-in Pekerjaan value from the tail of the real address.
+        value = _ADDRESS_NEXT_FIELD_TAIL_BLEED.sub(lambda m: m.group(1), value).strip()
     value = _TRAILING_SYMBOL_NOISE.sub("", value).strip()
     value = _TRAILING_BARE_NO_PATTERN.sub("", value).strip()
     # Skipped for no_siri itself -- "No <digits>" (or "No. Siri <digits>")
@@ -639,12 +723,14 @@ def _score_line_for_field(line: str, field_key: str | None) -> tuple[int, int, i
         # fine on HAKIM alone, so this doesn't need WALI to be recognised.
         if any(token in upper for token in ("BAPA", "KANDUNG", "HAKIM")):
             score += 4
-    if field_key in ("pernikahan_kali", "isteri_ke"):
+    if field_key in ("pernikahan_kali", "isteri_ke", "talak_kali_ke"):
         # These fields' real value is always a short ordinal word -- without
         # this, best-line selection's plain word-count scoring prefers a
         # longer neighbouring field's bleed (confirmed on a real sample: a
         # registrar's name outscored the correct "PERTAMA" on word count
-        # alone once Nikah's widened regions started letting that bleed in).
+        # alone once Nikah's widened regions started letting that bleed in;
+        # talak_kali_ke shares the same bug with keadaan_talak's own bled-in
+        # checkbox text on a real Cerai sample).
         if any(token in upper for token in ("PERTAMA", "KEDUA", "KETIGA", "KEEMPAT", "KELIMA")):
             score += 10
         # A person's name is never a valid isteri_ke/pernikahan_kali value --
@@ -692,7 +778,13 @@ def _select_best_line(lines: list[str], field_key: str | None) -> str | None:
                 address_candidates.append(line)
         if address_candidates:
             candidates = address_candidates
-    elif field_key in ("no_siri", "tarikh_nikah_hijri"):
+    elif field_key in (
+        "no_siri",
+        "tarikh_nikah_hijri",
+        "tarikh_daftar_hijri",
+        "tarikh_cerai_hijri",
+        "tarikh_rujuk_hijri",
+    ):
         # no_siri is a bare serial number -- the opposite of every other
         # plain_text field here, which is text and wants the no-digit
         # branch below. Without this, a widened region that picks up a
@@ -703,10 +795,15 @@ def _select_best_line(lines: list[str], field_key: str | None) -> str | None:
         # digits -- confirmed on a real client sample where a bled-in,
         # digit-free "D. BUTIR - BUTIR PERNIKAHAN" section header outscored
         # the field's own correct (digit-containing) value this same way.
+        # tarikh_daftar_hijri/tarikh_cerai_hijri/tarikh_rujuk_hijri share the
+        # identical shape and bug -- confirmed on a real Cerai client sample
+        # where tarikh_daftar_hijri's widened region also captured the
+        # registrar's digit-free name/job-title text below it, which won on
+        # word count alone without this override.
         digit_candidates = [line for line in candidates if any(char.isdigit() for char in line)]
         if digit_candidates:
             candidates = digit_candidates
-    elif field_key in ("pernikahan_kali", "isteri_ke"):
+    elif field_key in ("pernikahan_kali", "isteri_ke", "talak_kali_ke"):
         # This field's real value is always one of a closed set of ordinal
         # words -- prefer an ordinal-word candidate over everything else
         # FIRST, rather than filtering by digit presence the way no_siri/
@@ -716,7 +813,10 @@ def _select_best_line(lines: list[str], field_key: str | None) -> str | None:
         # postcode, the digit-preferring filter picked that digit-bearing
         # address line over the real, digit-free "PERTAMA" line outright --
         # excluding it before the ordinal-word scoring bonus ever got a
-        # chance to run).
+        # chance to run). talak_kali_ke shares the identical shape and bug --
+        # confirmed on a real Cerai client sample where its widened region
+        # also picked up keadaan_talak's own bled-in text from directly
+        # above, which outscored the real "PERTAMA" on word count alone.
         ordinal_candidates = [
             line
             for line in candidates
@@ -867,6 +967,19 @@ def normalize_wrapped_field(raw: str | None, *, field_key: str | None = None) ->
         line = _strip_label(line, field_key)
         line = _strip_trailing_noise(line, field_key)
         line = re.sub(r"\s+", " ", line).strip(" ,")
+        if (
+            field_key in ("alamat_isteri", "alamat_suami")
+            and line
+            and DATE_PATTERN.fullmatch(line)
+        ):
+            # Typed Cerai's tarikh_lahir_suami/isteri row sits directly
+            # above alamat_suami/alamat_isteri -- confirmed on a real client
+            # sample, that whole row's own birth date bled in as this
+            # field's own separate first line ("04-10-1932", nothing else on
+            # it), which then joined onto the front of the real address. A
+            # real address line always carries more than just a bare date,
+            # so a line that's ONLY a date is never genuine content here.
+            continue
         if line:
             cleaned_lines.append(line)
     if not cleaned_lines:
@@ -1098,7 +1211,7 @@ def _build_cerai_record(raw_fields: dict[str, RawField], *, template_name: str) 
         bangsa_suami=normalize_plain_text(_raw(raw_fields, "bangsa_suami")),
         tarikh_lahir_suami=normalize_birth_year_or_date(_raw(raw_fields, "tarikh_lahir_suami")),
         warganegara_suami=normalize_plain_text(_raw(raw_fields, "warganegara_suami")),
-        alamat_suami=normalize_address(_raw(raw_fields, "alamat_suami")),
+        alamat_suami=normalize_wrapped_field(_raw(raw_fields, "alamat_suami"), field_key="alamat_suami"),
         pekerjaan_suami=normalize_plain_text(_raw(raw_fields, "pekerjaan_suami")),
         nama_isteri=normalize_name(_raw(raw_fields, "nama_isteri"), field_key="nama_isteri"),
         ic_isteri=ic_baru_isteri or ic_lama_isteri,
@@ -1106,7 +1219,7 @@ def _build_cerai_record(raw_fields: dict[str, RawField], *, template_name: str) 
         bangsa_isteri=normalize_plain_text(_raw(raw_fields, "bangsa_isteri")),
         tarikh_lahir_isteri=normalize_birth_year_or_date(_raw(raw_fields, "tarikh_lahir_isteri")),
         warganegara_isteri=normalize_plain_text(_raw(raw_fields, "warganegara_isteri")),
-        alamat_isteri=normalize_address(_raw(raw_fields, "alamat_isteri")),
+        alamat_isteri=normalize_wrapped_field(_raw(raw_fields, "alamat_isteri"), field_key="alamat_isteri"),
         pekerjaan_isteri=normalize_plain_text(_raw(raw_fields, "pekerjaan_isteri")),
         bil_daftar_nikah=normalize_plain_text(_raw(raw_fields, "bil_daftar_nikah")),
         bil_daftar_rujuk_asal=normalize_plain_text(_raw(raw_fields, "bil_daftar_rujuk_asal")),
@@ -1117,19 +1230,19 @@ def _build_cerai_record(raw_fields: dict[str, RawField], *, template_name: str) 
         tempat_nikah_negeri=normalize_plain_text(_raw(raw_fields, "tempat_nikah_negeri")),
         tarikh_nikah=normalize_date_preserving_style(_raw(raw_fields, "tarikh_nikah")),
         tarikh_nikah_raw=_raw(raw_fields, "tarikh_nikah"),
-        tarikh_nikah_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_nikah_hijri")),
+        tarikh_nikah_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_nikah_hijri"), field_key="tarikh_nikah_hijri"),
         tarikh_rujuk=normalize_date_preserving_style(_raw(raw_fields, "tarikh_rujuk")),
         tarikh_rujuk_raw=_raw(raw_fields, "tarikh_rujuk"),
-        tarikh_rujuk_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_rujuk_hijri")),
+        tarikh_rujuk_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_rujuk_hijri"), field_key="tarikh_rujuk_hijri"),
         keadaan_talak=normalize_plain_text(_raw(raw_fields, "keadaan_talak")),
-        talak_kali_ke=normalize_plain_text(_raw(raw_fields, "talak_kali_ke")),
-        jumlah_talak=normalize_plain_text(_raw(raw_fields, "jumlah_talak")),
+        talak_kali_ke=normalize_plain_text(_raw(raw_fields, "talak_kali_ke"), field_key="talak_kali_ke"),
+        jumlah_talak=normalize_plain_text(_raw(raw_fields, "jumlah_talak"), field_key="jumlah_talak"),
         bayaran_tebus_talak=normalize_money(_raw(raw_fields, "bayaran_tebus_talak")),
         tempat_cerai=normalize_plain_text(_raw(raw_fields, "tempat_cerai")),
         tempat_bercerai=normalize_plain_text(_raw(raw_fields, "tempat_bercerai")),
         tarikh_cerai=normalize_date_preserving_style(_raw(raw_fields, "tarikh_cerai")),
         tarikh_cerai_raw=_raw(raw_fields, "tarikh_cerai"),
-        tarikh_cerai_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_cerai_hijri")),
+        tarikh_cerai_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_cerai_hijri"), field_key="tarikh_cerai_hijri"),
         cerai_dalam_keadaan=normalize_plain_text(_raw(raw_fields, "cerai_dalam_keadaan")),
         saksi_1=normalize_plain_text(_raw(raw_fields, "saksi_1"), field_key="saksi_1"),
         saksi_2=normalize_plain_text(_raw(raw_fields, "saksi_2"), field_key="saksi_2"),
@@ -1138,7 +1251,7 @@ def _build_cerai_record(raw_fields: dict[str, RawField], *, template_name: str) 
         nama_pendaftar=normalize_plain_text(_raw(raw_fields, "nama_pendaftar"), field_key="nama_pendaftar"),
         jawatan_pendaftar=normalize_jawatan(_raw(raw_fields, "jawatan_pendaftar")),
         tarikh_daftar=normalize_date_preserving_style(_raw(raw_fields, "tarikh_daftar")),
-        tarikh_daftar_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_daftar_hijri")),
+        tarikh_daftar_hijri=normalize_plain_text(_raw(raw_fields, "tarikh_daftar_hijri"), field_key="tarikh_daftar_hijri"),
         raw_bil=_raw(raw_fields, "bil"),
         raw_suami_isteri=_first_non_empty([_raw(raw_fields, "nama_suami"), _raw(raw_fields, "id_suami")]),
         raw_pendaftar=_raw(raw_fields, "nama_pendaftar"),

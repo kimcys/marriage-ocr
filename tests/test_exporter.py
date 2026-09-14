@@ -102,44 +102,72 @@ def test_exporter_drops_globally_unused_raw_columns() -> None:
     assert removed_columns.isdisjoint(EXPORT_COLUMN_TO_FIELD)
 
 
-def test_exporter_drops_rujuk_only_column() -> None:
-    # Tempat Rujuk had no other record type's data in it -- per explicit
-    # client request, removed entirely rather than blanked per-type.
-    assert "Tempat Rujuk" not in XLSX_COLUMNS
-    assert "Tempat Rujuk" not in EXPORT_COLUMN_TO_FIELD
+def test_exporter_drops_rujuk_only_or_cerai_only_or_globally_unused_columns() -> None:
+    # Tempat Rujuk was Rujuk-only, Bil Daftar Rujukan was globally
+    # unpopulated, and No Rujukan/No Telefon became globally unpopulated
+    # once also blanked for Cerai (see the Nikah-only test below) -- all
+    # per explicit client request, removed entirely rather than blanked
+    # per-type.
+    removed_columns = {"Tempat Rujuk", "Bil Daftar Rujukan", "No Rujukan", "No Telefon"}
+    assert removed_columns.isdisjoint(XLSX_COLUMNS)
+    assert removed_columns.isdisjoint(EXPORT_COLUMN_TO_FIELD)
 
 
-def test_exporter_blanks_shared_cerai_fields_on_rujuk_rows() -> None:
-    # No Rujukan / No Siri / No Telefon are real, populated columns for
-    # other record types (No Rujukan/No Telefon mostly for Cerai; No Siri
-    # for Nikah's legacy cert stamp too) -- shared in this one column list,
-    # so removing them outright would break Cerai/Nikah. Per explicit
-    # client request, Rujuk rows specifically must never show a value in
+def test_exporter_blanks_fields_only_real_for_nikah_on_other_record_types() -> None:
+    # No Siri / Saksi 1 / Saksi 2 / Umur Suami / Umur Isteri are real,
+    # populated columns for Nikah alone -- shared in this one column list,
+    # so removing them outright would break Nikah. Per explicit client
+    # request, Cerai/Rujuk rows specifically must never show a value in
     # these cells even when the underlying field is populated.
-    rujuk_record = replace(
-        _make_record(source_record="rujuk_001"),
-        record_type="RUJUK",
-        no_rujukan="12/2020",
+    nikah_record = replace(
+        _make_record(source_record="nikah_001"),
+        record_type="NIKAH",
         no_siri="654321",
-        no_telefon="0123456789",
+        saksi_1="E, BIN F",
+        saksi_2="G, BIN H",
     )
     cerai_record = replace(
         _make_record(source_record="cerai_001"),
         record_type="CERAI",
-        no_rujukan="34/2020",
         no_siri="123456",
-        no_telefon="0198765432",
+        saksi_1="I, BIN J",
+        saksi_2="K, BIN L",
+    )
+
+    nikah_row = record_to_export_dict(nikah_record, timestamp="2026-05-25T12:00:00")
+    cerai_row = record_to_export_dict(cerai_record, timestamp="2026-05-25T12:00:00")
+
+    assert nikah_row["No Siri"] == "654321"
+    assert nikah_row["Saksi 1"] == "E, BIN F"
+    assert nikah_row["Saksi 2"] == "G, BIN H"
+    assert nikah_row["Umur Suami"] == nikah_record.umur_suami
+    assert nikah_row["Umur Isteri"] == nikah_record.umur_isteri
+    assert cerai_row["No Siri"] is None
+    assert cerai_row["Saksi 1"] is None
+    assert cerai_row["Saksi 2"] is None
+    assert cerai_row["Umur Suami"] is None
+    assert cerai_row["Umur Isteri"] is None
+
+
+def test_exporter_blanks_tarikh_keluar_on_cerai_rows_only() -> None:
+    # Tarikh Keluar is real, populated data for Nikah and Rujuk alike --
+    # per explicit client request, pure clutter for Cerai specifically.
+    rujuk_record = replace(
+        _make_record(source_record="rujuk_001"),
+        record_type="RUJUK",
+        tarikh_keluar="01-01-2020",
+    )
+    cerai_record = replace(
+        _make_record(source_record="cerai_001"),
+        record_type="CERAI",
+        tarikh_keluar="02-02-2020",
     )
 
     rujuk_row = record_to_export_dict(rujuk_record, timestamp="2026-05-25T12:00:00")
     cerai_row = record_to_export_dict(cerai_record, timestamp="2026-05-25T12:00:00")
 
-    assert rujuk_row["No Rujukan"] is None
-    assert rujuk_row["No Siri"] is None
-    assert rujuk_row["No Telefon"] is None
-    assert cerai_row["No Rujukan"] == "34/2020"
-    assert cerai_row["No Siri"] == "123456"
-    assert cerai_row["No Telefon"] == "0198765432"
+    assert rujuk_row["Tarikh Keluar"] == "01-01-2020"
+    assert cerai_row["Tarikh Keluar"] is None
 
 
 def test_exporter_can_show_public_columns_only(tmp_path: Path) -> None:

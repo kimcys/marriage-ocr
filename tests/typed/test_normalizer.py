@@ -605,3 +605,114 @@ def test_tarikh_masuk_islam_rejects_non_date_bleed(raw: str) -> None:
 
 def test_tarikh_masuk_islam_accepts_a_real_date() -> None:
     assert normalize_date_preserving_style("05-01-1960") == "05-01-1960"
+
+
+def test_alamat_isteri_strips_a_rumah_label_tail_with_the_word_rumah_still_attached() -> None:
+    # Regression: confirmed on real client typed-Cerai samples
+    # (cerai-typed.csv), this form's own region boundary clips "Alamat ("
+    # but leaves "Rumah ) :" (the word AND the closing paren/colon) intact
+    # -- a different partial-crop shape than typed Rujuk's own bare ") :"
+    # tail (already covered by the tests above), so the leading pattern
+    # needs to tolerate "Rumah" optionally being present too.
+    assert (
+        normalize_wrapped_field(
+            "Rumah ) : NO 28 JALAN 2B TAMAN JATI BATU 17 48000 RAWANG SELANGOR",
+            field_key="alamat_isteri",
+        )
+        == "NO 28 JALAN 2B TAMAN JATI BATU 17 48000 RAWANG SELANGOR"
+    )
+
+
+def test_alamat_isteri_strips_a_bled_in_pekerjaan_value_after_the_state_name() -> None:
+    # Regression: confirmed on real client typed-Cerai samples, Pekerjaan
+    # Isteri's own row sits directly below alamat_isteri and its free-text
+    # value (no fixed label to anchor on, unlike Rujuk's Islam-label bleed)
+    # bleeds onto the tail of the real address, right after the state name
+    # that always closes a real Malaysian address on this form.
+    assert (
+        normalize_wrapped_field(
+            "Rumah ) : NO 701 TINGKAT 6 BLOK 58 PANGSAPURI ALUNAN BAYU JALAN TIMUN SEKSYEN 24 "
+            "40300 SHAH ALAM SELANGOR : PEGAWAI PENTADBIRAN",
+            field_key="alamat_isteri",
+        )
+        == "NO 701 TINGKAT 6 BLOK 58 PANGSAPURI ALUNAN BAYU JALAN TIMUN SEKSYEN 24 40300 SHAH ALAM SELANGOR"
+    )
+
+
+def test_alamat_suami_drops_a_bled_in_whole_line_birth_date() -> None:
+    # Regression: confirmed on a real client typed-Cerai sample,
+    # tarikh_lahir_suami's own row bled in as alamat_suami's entire first
+    # line ("04-10-1932", nothing else on it) -- a real address line always
+    # carries more than just a bare date, so a line that's ONLY a date is
+    # never genuine address content.
+    assert (
+        normalize_wrapped_field(
+            "04-10-1932\nRumah ) : 1 JALAN SS14 / 6F47500 SUBANG JAYA",
+            field_key="alamat_suami",
+        )
+        == "1 JALAN SS14 / 6F47500 SUBANG JAYA"
+    )
+
+
+def test_nama_suami_drops_a_bled_in_pernikahan_location_header_line() -> None:
+    # Regression: confirmed on several real client typed-Cerai samples
+    # (cerai-typed.csv), this administrative header line ("Pernikahan :
+    # Daerah : <daerah> Negeri / Negara : <negeri>") -- printed directly
+    # above nama_suami's own row -- bleeds in as its own whole line and,
+    # being longer than most real names, wins plain word-count scoring
+    # outright with no bonus to prefer the real name instead.
+    from marriage_ocr.typed.normalizer import normalize_name
+
+    assert (
+        normalize_name(
+            "Pernikahan : Daerah : WILAYAH PERSEKUTUAN Negeri / Negara : KUALA LUMPUR\nAHMAD BIN DAHAN",
+            field_key="nama_suami",
+        )
+        == "AHMAD BIN DAHAN"
+    )
+
+
+def test_tarikh_lahir_strips_its_own_label_before_date_parsing() -> None:
+    # Regression: confirmed on a real client typed-Cerai sample, leaving
+    # this field's own "Lahir :" label in place corrupts
+    # generate_date_candidates' OCR-digit-confusion step (L and I both map
+    # to "1" there), splitting "LAHIR" into extra bogus digit groups that
+    # make the real date fail to parse as day.month.year at all.
+    from marriage_ocr.typed.normalizer import normalize_birth_year_or_date
+
+    assert normalize_birth_year_or_date("Lahir : 30-06-1949 .") == "30-06-1949"
+
+
+def test_talak_kali_ke_prefers_the_real_ordinal_over_a_bled_in_checkbox_line() -> None:
+    # Regression: confirmed on a real client typed-Cerai sample,
+    # keadaan_talak's own bled-in checkbox text ("Raj'ie / Bain ( Bain
+    # Sughra / Bain Kubra") outscored the real "ke : PERTAMA" on word count
+    # once this field's region was widened to reach a second sample's
+    # shifted value position.
+    assert (
+        normalize_plain_text(
+            "Perceraian : * Raj'ie / Bain ( Bain Sughra / Bain Kubra\nke : PERTAMA",
+            field_key="talak_kali_ke",
+        )
+        == "PERTAMA"
+    )
+
+
+def test_jumlah_talak_strips_its_own_clipped_label() -> None:
+    # Regression: confirmed on a real client typed-Cerai sample, this
+    # field's own region boundary clips "Jumlah", leaving a bare "Talaq :"
+    # tail (this form's own spelling variant) glued onto the real cardinal.
+    assert normalize_plain_text("Talaq : SATU", field_key="jumlah_talak") == "SATU"
+
+
+@pytest.mark.parametrize("field_key", ["tarikh_daftar_hijri", "tarikh_cerai_hijri", "tarikh_rujuk_hijri"])
+def test_hijri_date_fields_do_not_self_erase_their_own_hijrah_masihi_row(field_key: str) -> None:
+    # Regression: confirmed on a real client typed-Cerai sample, this
+    # field's own printed row ("Hijrah <date>\nMasihi <date>") starts with
+    # the exact bare keywords _TRAILING_NOISE_PATTERN strips as *bleed* from
+    # OTHER fields -- without stripping this field's own leading "Hijrah"
+    # label first, that keyword wiped its own value down to nothing.
+    assert (
+        normalize_plain_text("Hijrah 27 RAMADHAN 1431\nMasihi 06.09.2010", field_key=field_key)
+        == "27 RAMADHAN 1431"
+    )

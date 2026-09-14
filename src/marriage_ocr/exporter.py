@@ -53,7 +53,6 @@ XLSX_COLUMNS = [
     "Belanja Hantaran",
     "Umur Wali",
     "Alamat Wali",
-    "No Rujukan",
     "No Siri",
     "Tarikh Daftar",
     "IC Suami",
@@ -62,12 +61,10 @@ XLSX_COLUMNS = [
     "Keadaan Talak",
     "Jumlah Talak",
     "Tarikh Cerai",
-    "Bil Daftar Rujukan",
     "Bil Cerai",
     "Rujuk Kali",
     "Tarikh Rujuk",
     "Hal Hal Lain",
-    "No Telefon",
     "Record Type",
     "Confidence",
     "Status Review",
@@ -173,7 +170,6 @@ EXPORT_COLUMN_TO_FIELD = {
     "Belanja Hantaran": "belanja_hantaran",
     "Umur Wali": "umur_wali",
     "Alamat Wali": "alamat_wali",
-    "No Rujukan": "no_rujukan",
     "No Siri": "no_siri",
     "Tarikh Daftar": "tarikh_daftar",
     "IC Suami": "ic_suami",
@@ -182,12 +178,10 @@ EXPORT_COLUMN_TO_FIELD = {
     "Keadaan Talak": "keadaan_talak",
     "Jumlah Talak": "jumlah_talak",
     "Tarikh Cerai": "tarikh_cerai",
-    "Bil Daftar Rujukan": "bil_daftar_rujukan",
     "Bil Cerai": "bil_cerai",
     "Rujuk Kali": "rujuk_kali",
     "Tarikh Rujuk": "tarikh_rujuk",
     "Hal Hal Lain": "hal_hal_lain",
-    "No Telefon": "no_telefon",
     "Record Type": "record_type",
     "Confidence": "confidence",
     "Status": "status_review",
@@ -491,13 +485,22 @@ def record_from_export_dict(data: Mapping[str, Any]) -> ExtractedRecord:
     return ExtractedRecord(**payload)
 
 
-def _unless_rujuk(value: Any, *, record_type: Any) -> Any:
-    # No Rujukan/No Siri/No Telefon are real, populated fields for other
-    # record types (No Rujukan/No Siri especially for Cerai; No Siri also
-    # for Nikah's legacy cert stamp) -- per explicit client request, this
-    # blanks them for Rujuk specifically without dropping the column
-    # entirely and losing that other data.
-    if record_type == "RUJUK":
+def _only_nikah(value: Any, *, record_type: Any) -> Any:
+    # No Siri/Saksi 1/Saksi 2/Umur Suami/Umur Isteri are real, populated
+    # fields for Nikah alone at this point (No Siri for its own legacy-cert
+    # stamp; Saksi 1/2 and Umur are Nikah-only concepts, Cerai/Rujuk have no
+    # equivalent) -- per explicit client request, blanked for every other
+    # record type rather than dropping the column entirely and losing
+    # Nikah's own real data.
+    if record_type != "NIKAH":
+        return None
+    return value
+
+
+def _unless_cerai(value: Any, *, record_type: Any) -> Any:
+    # Tarikh Keluar is real, populated data for Nikah and Rujuk alike --
+    # per explicit client request, pure clutter for Cerai specifically.
+    if record_type == "CERAI":
         return None
     return value
 
@@ -508,21 +511,21 @@ def _record_to_row(record: ExtractedRecord) -> list[Any]:
         record.nama_suami,
         record.ic_lama_suami,
         record.ic_baru_suami,
-        record.umur_suami,
+        _only_nikah(record.umur_suami, record_type=record.record_type),
         record.nama_isteri,
         record.ic_lama_isteri,
         record.ic_baru_isteri,
-        record.umur_isteri,
+        _only_nikah(record.umur_isteri, record_type=record.record_type),
         record.mas_kahwin,
         record.nama_pendaftar,
         record.alamat_pendaftar,
         record.nama_wali,
         record.hubungan_wali,
-        record.saksi_1,
-        record.saksi_2,
+        _only_nikah(record.saksi_1, record_type=record.record_type),
+        _only_nikah(record.saksi_2, record_type=record.record_type),
         record.tarikh_nikah,
         record.tarikh_nikah_raw,
-        record.tarikh_keluar,
+        _unless_cerai(record.tarikh_keluar, record_type=record.record_type),
         record.remarks,
         record.bangsa_suami,
         record.warganegara_suami,
@@ -540,8 +543,7 @@ def _record_to_row(record: ExtractedRecord) -> list[Any]:
         record.belanja_hantaran,
         record.umur_wali,
         record.alamat_wali,
-        _unless_rujuk(record.no_rujukan, record_type=record.record_type),
-        _unless_rujuk(record.no_siri, record_type=record.record_type),
+        _only_nikah(record.no_siri, record_type=record.record_type),
         record.tarikh_daftar,
         record.ic_suami,
         record.ic_isteri,
@@ -549,12 +551,10 @@ def _record_to_row(record: ExtractedRecord) -> list[Any]:
         record.keadaan_talak,
         record.jumlah_talak,
         record.tarikh_cerai,
-        record.bil_daftar_rujukan,
         record.bil_cerai,
         record.rujuk_kali,
         record.tarikh_rujuk,
         record.hal_hal_lain,
-        _unless_rujuk(record.no_telefon, record_type=record.record_type),
         record.record_type,
         record.confidence,
         record.status_review,

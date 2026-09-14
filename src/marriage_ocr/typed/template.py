@@ -317,31 +317,74 @@ CERAI_MODERN_REGIONS: dict[str, tuple[int, Region]] = {
     "nama_suami": (1, Region(0.23, 0.477, 0.90, 0.495)),
     "id_suami": (1, Region(0.35, 0.502, 0.56, 0.520)),
     "bangsa_suami": (1, Region(0.70, 0.502, 0.90, 0.520)),
-    "tarikh_lahir_suami": (1, Region(0.30, 0.526, 0.48, 0.544)),
+    # x1 widened from 0.30 to 0.20 -- confirmed on a real second client
+    # sample (a different print run of this form, whose fill-in-blank
+    # starts almost right after "Tarikh Lahir :" rather than leaving the
+    # wider gap this template's calibration sample does) that the real date
+    # ("04-10-1932", word-centre x~0.27) landed entirely to the left of the
+    # old x1 boundary and was excluded, leaving the row above's bled-in
+    # passport number as the only candidate instead.
+    "tarikh_lahir_suami": (1, Region(0.20, 0.526, 0.48, 0.544)),
     "warganegara_suami": (1, Region(0.68, 0.526, 0.90, 0.544)),
     "alamat_suami": (1, Region(0.20, 0.548, 0.92, 0.572)),
     "pekerjaan_suami": (1, Region(0.21, 0.579, 0.90, 0.597)),
     "nama_isteri": (1, Region(0.22, 0.604, 0.90, 0.622)),
     "id_isteri": (1, Region(0.35, 0.628, 0.56, 0.646)),
     "bangsa_isteri": (1, Region(0.70, 0.628, 0.90, 0.646)),
-    "tarikh_lahir_isteri": (1, Region(0.30, 0.652, 0.48, 0.670)),
+    # x1 widened -- same reasoning as tarikh_lahir_suami above (confirmed
+    # real date "30-06-1949" on the same second sample landed left of the
+    # old boundary).
+    "tarikh_lahir_isteri": (1, Region(0.20, 0.652, 0.48, 0.670)),
     "warganegara_isteri": (1, Region(0.68, 0.652, 0.90, 0.670)),
     "alamat_isteri": (1, Region(0.20, 0.680, 0.92, 0.705)),
     "pekerjaan_isteri": (1, Region(0.21, 0.705, 0.90, 0.723)),
     "keadaan_talak": (1, Region(0.29, 0.729, 0.90, 0.747)),
-    "talak_kali_ke": (1, Region(0.30, 0.749, 0.50, 0.760)),
-    "jumlah_talak": (1, Region(0.70, 0.749, 0.90, 0.760)),
+    # x1/y2 widened -- confirmed on a real second sample (same print run as
+    # tarikh_lahir_suami/isteri above) that the real ordinal ("PERTAMA",
+    # word-centre x~0.27) landed left of the old x1=0.30, leaving
+    # keadaan_talak's own bled-in text (from directly above) as the only
+    # candidate instead.
+    "talak_kali_ke": (1, Region(0.20, 0.749, 0.50, 0.762)),
+    # x1 widened -- same reasoning ("SATU", word-centre x~0.67, landed left
+    # of the old x1=0.70 on the same sample).
+    "jumlah_talak": (1, Region(0.60, 0.749, 0.90, 0.762)),
     "bayaran_tebus_talak": (1, Region(0.36, 0.769, 0.90, 0.787)),
     "tempat_cerai": (1, Region(0.29, 0.791, 0.90, 0.809)),
     "tempat_bercerai": (1, Region(0.45, 0.811, 0.90, 0.828)),
+    # NOT widened, unlike several other fields on this row's block -- tried
+    # widening left/down to reach a real second sample's own two-line
+    # "Hijrah <date>" / "Masihi <date>" layout (this template's calibration
+    # sample shares one line, Hijrah left / Masihi right), but that pulled
+    # in this row's own clipped "Tarikh Bercerai:"/"Tempat Bercerai:" label
+    # tails ("ikh Bercerai :", "mpat Bercerai :") -- confirmed those parse as
+    # FALSE-POSITIVE dates via generate_date_candidates' letter/digit OCR-
+    # confusion table (e.g. "B"->"8" turns "ikh Bercerai :" into a bogus
+    # "01-08-0001"), silently corrupting this template's own calibration
+    # sample, which was already correct at the old, narrower bounds. A wrong
+    # confident date is worse than a blank one, so this stays narrow; the
+    # two-line layout variant remains a known gap.
     "tarikh_cerai_hijri": (1, Region(0.33, 0.832, 0.60, 0.850)),
     "tarikh_cerai": (1, Region(0.70, 0.832, 0.90, 0.850)),
     "cerai_dalam_keadaan": (1, Region(0.42, 0.855, 0.90, 0.873)),
     "hal_hal_lain": (2, Region(0.10, 0.130, 0.92, 0.440)),
-    "tarikh_daftar_hijri": (2, Region(0.25, 0.441, 0.50, 0.459)),
-    "tarikh_daftar": (2, Region(0.28, 0.455, 0.50, 0.472)),
-    "nama_pendaftar": (2, Region(0.45, 0.455, 0.92, 0.472)),
-    "jawatan_pendaftar": (2, Region(0.45, 0.474, 0.92, 0.502)),
+    # y2 widened far past this row's own old bounds (0.459/0.472/0.502) --
+    # confirmed on a real second sample that "Lain-lain Kenyataan"'s own
+    # free-text remark block renders at very different heights depending on
+    # how much was actually typed into it (a near-empty remark on one
+    # sample vs. a multi-sentence paragraph on this template's calibration
+    # sample), which pushes everything below it (Tarikh/Nama Pendaftar/
+    # Jawatan Pendaftar) down by an amount this template's single top-of-
+    # page anchor can't predict (that drift measured ~29% of the page's own
+    # anchor-to-anchor span on the second sample -- far outside what a
+    # linear scale correction is trusted for, see estimate_transform's own
+    # scale_y tolerance). Same "widen the region, let each field's own
+    # normalizer disambiguate the wider overlapping candidate pool" approach
+    # already used for NIKAH_MODERN_REGIONS' tempat_nikah/nama_pendaftar
+    # above (see that section's own comment for the identical root cause).
+    "tarikh_daftar_hijri": (2, Region(0.20, 0.440, 0.55, 0.62)),
+    "tarikh_daftar": (2, Region(0.20, 0.440, 0.55, 0.62)),
+    "nama_pendaftar": (2, Region(0.45, 0.440, 0.92, 0.65)),
+    "jawatan_pendaftar": (2, Region(0.45, 0.440, 0.92, 0.66)),
 }
 
 CERAI_MODERN_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
@@ -353,6 +396,17 @@ CERAI_MODERN_ANCHORS: dict[int, dict[str, tuple[float, float]]] = {
     },
     2: {
         "LAIN LAIN KENYATAAN": (0.117, 0.136),
+        # Alternate wording for the exact same header -- confirmed on a
+        # real second sample that prints "Kenyataan lain:-" (KENYATAAN
+        # before LAIN) instead of "Lain-lain Kenyataan:" (LAIN LAIN
+        # KENYATAAN); _anchor_matches requires an exact token-order match,
+        # so without this the anchor silently failed to match at all on
+        # that print run, leaving page 2's transform at identity (no
+        # correction whatsoever) instead of even the small dy this one
+        # weak anchor can offer. Same expected (x, y) as the phrase above:
+        # both are simply this page's very first header, regardless of
+        # which wording a given print run uses.
+        "KENYATAAN LAIN": (0.117, 0.136),
     },
 }
 

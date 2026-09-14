@@ -61,7 +61,6 @@ TYPED_CSV_COLUMNS = [
     "Tarikh Masuk Islam Suami",
     "Tarikh Masuk Islam Isteri",
     "Bil Daftar Nikah",
-    "Bil Daftar Rujuk Asal",
     "Tarikh Rujuk",
     "Tarikh Rujuk Hijri",
     "Tarikh Cerai",
@@ -76,14 +75,10 @@ TYPED_CSV_COLUMNS = [
     "Keadaan Talak",
     "Bayaran Tebus Talak",
     "Tempat Cerai",
-    "Tempat Bercerai",
     "Cerai Dalam Keadaan",
-    "No Sijil Perakuan Nikah Rujuk",
-    "No Permohonan Cerai",
     "Bil Cerai",
     "Rujuk Kali",
     "Jawatan Pendaftar",
-    "Jumlah Bayaran",
     "Hal Hal Lain",
     "Source File",
     "Processing Status",
@@ -137,22 +132,31 @@ def _value_unless_nikah(value: object | None, *, record_type: str) -> str:
     return _value(value)
 
 
-# No Siri / Pekerjaan Suami-Isteri / Tempat Nikah Daerah-Negeri are real,
-# populated fields for other typed record types (No Siri for Nikah's legacy
-# cert stamp; the rest for Cerai) -- per explicit client request, this
-# blanks them for Rujuk specifically without dropping the column entirely
-# and losing that other data.
+# Pekerjaan Suami-Isteri / Tempat Nikah Daerah-Negeri are real, populated
+# fields for typed Cerai -- per explicit client request, this blanks them
+# for Rujuk specifically without dropping the column entirely and losing
+# that other data.
 def _value_unless_rujuk(value: object | None, *, record_type: str) -> str:
     if record_type == "RUJUK":
         return ""
     return _value(value)
 
 
-# Jumlah Bayaran is real for typed Cerai but, per explicit client request,
-# pure clutter for both Nikah (see _value_unless_nikah's own docstring) and
-# Rujuk.
-def _value_unless_nikah_or_rujuk(value: object | None, *, record_type: str) -> str:
-    if record_type in ("NIKAH", "RUJUK"):
+# Tarikh Keluar is real, populated data for typed Nikah and Rujuk alike --
+# per explicit client request, pure clutter for Cerai specifically.
+def _value_unless_cerai(value: object | None, *, record_type: str) -> str:
+    if record_type == "CERAI":
+        return ""
+    return _value(value)
+
+
+# No Siri / Saksi 1 / Saksi 2 are real, populated fields for typed Nikah
+# alone (No Siri for its own legacy-cert stamp; Saksi 1/2 are Nikah's own
+# witnesses, a concept Cerai/Rujuk have no equivalent of at all) -- per
+# explicit client request, blanked for every other record type rather than
+# dropping the column entirely and losing Nikah's own real data.
+def _value_only_nikah(value: object | None, *, record_type: str) -> str:
+    if record_type != "NIKAH":
         return ""
     return _value(value)
 
@@ -179,22 +183,30 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Nama Suami": _value(record.nama_suami),
         "IC Lama Suami": _value(record.ic_lama_suami),
         "IC Baru Suami": _value(record.ic_baru_suami),
-        "Umur Suami": _value_or_no_info(record.umur_suami, applies=umur_ic_wali_applies),
+        "Umur Suami": (
+            _value_or_no_info(record.umur_suami, applies=umur_ic_wali_applies)
+            if record.record_type == "NIKAH"
+            else ""
+        ),
         "Nama Isteri": _value(record.nama_isteri),
         "IC Lama Isteri": _value(record.ic_lama_isteri),
         "IC Baru Isteri": _value(record.ic_baru_isteri),
-        "Umur Isteri": _value_or_no_info(record.umur_isteri, applies=umur_ic_wali_applies),
+        "Umur Isteri": (
+            _value_or_no_info(record.umur_isteri, applies=umur_ic_wali_applies)
+            if record.record_type == "NIKAH"
+            else ""
+        ),
         "Mas Kahwin": _value(record.mas_kahwin),
         "Nama Pendaftar": _value(record.nama_pendaftar),
         "Alamat Pendaftar": _value(record.alamat_pendaftar),
         "Nama Wali": _value(record.nama_wali),
         "Hubungan Wali": _value(record.hubungan_wali),
-        "Saksi 1": _value(record.saksi_1),
-        "Saksi 2": _value(record.saksi_2),
+        "Saksi 1": _value_only_nikah(record.saksi_1, record_type=record.record_type),
+        "Saksi 2": _value_only_nikah(record.saksi_2, record_type=record.record_type),
         "Tarikh Nikah": _value(record.tarikh_nikah),
         "Tarikh Nikah Hijri": _value(record.tarikh_nikah_hijri),
-        "Tarikh Keluar": _value(record.tarikh_keluar),
-        "No Siri": _value_unless_rujuk(record.no_siri, record_type=record.record_type),
+        "Tarikh Keluar": _value_unless_cerai(record.tarikh_keluar, record_type=record.record_type),
+        "No Siri": _value_only_nikah(record.no_siri, record_type=record.record_type),
         "Hari Nikah": _value(record.hari_nikah),
         "Masa Nikah": _value(record.masa_nikah),
         "Tempat Nikah": _value(record.tempat_nikah),
@@ -220,7 +232,6 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Tarikh Masuk Islam Suami": _value(record.tarikh_masuk_islam_suami),
         "Tarikh Masuk Islam Isteri": _value(record.tarikh_masuk_islam_isteri),
         "Bil Daftar Nikah": _value(record.bil_daftar_nikah),
-        "Bil Daftar Rujuk Asal": _value(record.bil_daftar_rujuk_asal),
         "Tarikh Rujuk": _value(record.tarikh_rujuk),
         "Tarikh Rujuk Hijri": _value(record.tarikh_rujuk_hijri),
         "Tarikh Cerai": _value(record.tarikh_cerai),
@@ -235,14 +246,10 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Keadaan Talak": _value(record.keadaan_talak),
         "Bayaran Tebus Talak": _value(record.bayaran_tebus_talak),
         "Tempat Cerai": _value(record.tempat_cerai),
-        "Tempat Bercerai": _value(record.tempat_bercerai),
         "Cerai Dalam Keadaan": _value(record.cerai_dalam_keadaan),
-        "No Sijil Perakuan Nikah Rujuk": _value(record.no_sijil_perakuan_nikah_rujuk),
-        "No Permohonan Cerai": _value(record.no_permohonan_cerai),
         "Bil Cerai": _value(record.bil_cerai),
         "Rujuk Kali": _value(record.rujuk_kali),
         "Jawatan Pendaftar": _value(record.jawatan_pendaftar),
-        "Jumlah Bayaran": _value_unless_nikah_or_rujuk(record.jumlah_bayaran, record_type=record.record_type),
         "Hal Hal Lain": _value(record.hal_hal_lain),
         "Source File": result.source_file,
         "Processing Status": result.processing_status.value,

@@ -168,11 +168,10 @@ def test_typed_csv_drops_nikah_only_duplicate_columns() -> None:
 
 
 def test_typed_csv_blanks_shared_cerai_rujuk_fields_on_nikah_rows(tmp_path: Path) -> None:
-    # Jumlah Bayaran / Tarikh Lahir Suami / Tarikh Lahir Isteri are real,
-    # populated columns for typed Cerai/Rujuk (a Legacy-era registration fee;
-    # a birthdate printed instead of an age) -- shared in this one column
-    # list, so removing the column itself would break Cerai/Rujuk. Per
-    # explicit client request, Nikah rows specifically must never show a
+    # Tarikh Lahir Suami/Isteri are real, populated columns for typed Cerai/
+    # Rujuk (a birthdate printed instead of an age) -- shared in this one
+    # column list, so removing the column itself would break Cerai/Rujuk.
+    # Per explicit client request, Nikah rows specifically must never show a
     # value in these cells even when the underlying field is populated
     # (Nikah Legacy genuinely sets tarikh_lahir_suami/isteri internally, to
     # decide whether Umur's own TIADA MAKLUMAT placeholder applies).
@@ -185,7 +184,6 @@ def test_typed_csv_blanks_shared_cerai_rujuk_fields_on_nikah_rows(tmp_path: Path
                 nama_suami="A, BIN B",
                 tarikh_lahir_suami="1980",
                 tarikh_lahir_isteri="1985",
-                jumlah_bayaran="RM 5",
             ),
             source_file="nikah_legacy.pdf",
             processing_status=ProcessingStatus.SUCCESS,
@@ -199,7 +197,6 @@ def test_typed_csv_blanks_shared_cerai_rujuk_fields_on_nikah_rows(tmp_path: Path
                 nama_suami="C, BIN D",
                 tarikh_lahir_suami="1980",
                 tarikh_lahir_isteri="1985",
-                jumlah_bayaran="RM 5",
             ),
             source_file="cerai.pdf",
             processing_status=ProcessingStatus.SUCCESS,
@@ -212,10 +209,8 @@ def test_typed_csv_blanks_shared_cerai_rujuk_fields_on_nikah_rows(tmp_path: Path
 
     assert rows["nikah_legacy.pdf"]["Tarikh Lahir Suami"] == ""
     assert rows["nikah_legacy.pdf"]["Tarikh Lahir Isteri"] == ""
-    assert rows["nikah_legacy.pdf"]["Jumlah Bayaran"] == ""
     assert rows["cerai.pdf"]["Tarikh Lahir Suami"] == "1980"
     assert rows["cerai.pdf"]["Tarikh Lahir Isteri"] == "1985"
-    assert rows["cerai.pdf"]["Jumlah Bayaran"] == "RM 5"
 
 
 def test_typed_csv_drops_rujuk_only_or_globally_unused_columns() -> None:
@@ -227,14 +222,12 @@ def test_typed_csv_drops_rujuk_only_or_globally_unused_columns() -> None:
     assert removed_columns.isdisjoint(TYPED_CSV_COLUMNS)
 
 
-def test_typed_csv_blanks_shared_nikah_cerai_fields_on_rujuk_rows(tmp_path: Path) -> None:
-    # No Siri / Pekerjaan Suami-Isteri / Tempat Nikah Daerah-Negeri /
-    # Jumlah Bayaran are real, populated columns for other typed record
-    # types (No Siri for Nikah's legacy cert stamp; the rest for Cerai) --
-    # shared in this one column list, so removing them outright would break
-    # Nikah/Cerai. Per explicit client request, Rujuk rows specifically must
-    # never show a value in these cells even when the underlying field is
-    # populated.
+def test_typed_csv_blanks_shared_cerai_fields_on_rujuk_rows(tmp_path: Path) -> None:
+    # Pekerjaan Suami-Isteri / Tempat Nikah Daerah-Negeri are real, populated
+    # columns for typed Cerai -- shared in this one column list, so removing
+    # them outright would break Cerai. Per explicit client request, Rujuk
+    # rows specifically must never show a value in these cells even when the
+    # underlying field is populated.
     output = tmp_path / "typed_records.csv"
     store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
     store.upsert(
@@ -243,12 +236,10 @@ def test_typed_csv_blanks_shared_nikah_cerai_fields_on_rujuk_rows(tmp_path: Path
                 record_type="RUJUK",
                 bil="01/2009",
                 nama_suami="A, BIN B",
-                no_siri="123456",
                 pekerjaan_suami="PENIAGA",
                 pekerjaan_isteri="SURI RUMAH",
                 tempat_nikah_daerah="PETALING",
                 tempat_nikah_negeri="SELANGOR",
-                jumlah_bayaran="RM 5",
             ),
             source_file="rujuk.pdf",
             processing_status=ProcessingStatus.SUCCESS,
@@ -260,12 +251,10 @@ def test_typed_csv_blanks_shared_nikah_cerai_fields_on_rujuk_rows(tmp_path: Path
                 record_type="CERAI",
                 bil="02/2009",
                 nama_suami="C, BIN D",
-                no_siri="654321",
                 pekerjaan_suami="PENIAGA",
                 pekerjaan_isteri="SURI RUMAH",
                 tempat_nikah_daerah="PETALING",
                 tempat_nikah_negeri="SELANGOR",
-                jumlah_bayaran="RM 5",
             ),
             source_file="cerai.pdf",
             processing_status=ProcessingStatus.SUCCESS,
@@ -276,18 +265,115 @@ def test_typed_csv_blanks_shared_nikah_cerai_fields_on_rujuk_rows(tmp_path: Path
     with output.open(newline="", encoding="utf-8-sig") as handle:
         rows = {row["Source File"]: row for row in csv.DictReader(handle)}
 
-    assert rows["rujuk.pdf"]["No Siri"] == ""
     assert rows["rujuk.pdf"]["Pekerjaan Suami"] == ""
     assert rows["rujuk.pdf"]["Pekerjaan Isteri"] == ""
     assert rows["rujuk.pdf"]["Tempat Nikah Daerah"] == ""
     assert rows["rujuk.pdf"]["Tempat Nikah Negeri"] == ""
-    assert rows["rujuk.pdf"]["Jumlah Bayaran"] == ""
-    assert rows["cerai.pdf"]["No Siri"] == "654321"
     assert rows["cerai.pdf"]["Pekerjaan Suami"] == "PENIAGA"
     assert rows["cerai.pdf"]["Pekerjaan Isteri"] == "SURI RUMAH"
     assert rows["cerai.pdf"]["Tempat Nikah Daerah"] == "PETALING"
     assert rows["cerai.pdf"]["Tempat Nikah Negeri"] == "SELANGOR"
-    assert rows["cerai.pdf"]["Jumlah Bayaran"] == "RM 5"
+
+
+def test_typed_csv_drops_globally_unused_or_cerai_only_columns() -> None:
+    # Per explicit client request -- Tempat Bercerai was Cerai-only (Tempat
+    # Cerai is the correct column instead) and the other three were globally
+    # unpopulated across every typed record type, so all were removed from
+    # the schema entirely rather than blanked per-type.
+    removed_columns = {
+        "Bil Daftar Rujuk Asal",
+        "No Sijil Perakuan Nikah Rujuk",
+        "No Permohonan Cerai",
+        "Tempat Bercerai",
+        "Jumlah Bayaran",
+    }
+    assert removed_columns.isdisjoint(TYPED_CSV_COLUMNS)
+
+
+def test_typed_csv_blanks_fields_only_real_for_nikah_on_other_record_types(tmp_path: Path) -> None:
+    # No Siri / Saksi 1 / Saksi 2 are real, populated columns for typed
+    # Nikah alone -- shared in this one column list, so removing them
+    # outright would break Nikah. Per explicit client request, Cerai rows
+    # specifically must never show a value in these cells even when the
+    # underlying field is populated (already blanked for Rujuk previously).
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(
+                bil="01/2009",
+                nama_suami="A, BIN B",
+                no_siri="123456",
+                saksi_1="E, BIN F",
+                saksi_2="G, BIN H",
+            ),
+            source_file="nikah.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(
+                record_type="CERAI",
+                bil="02/2009",
+                nama_suami="C, BIN D",
+                no_siri="654321",
+                saksi_1="I, BIN J",
+                saksi_2="K, BIN L",
+            ),
+            source_file="cerai.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        rows = {row["Source File"]: row for row in csv.DictReader(handle)}
+
+    assert rows["nikah.pdf"]["No Siri"] == "123456"
+    assert rows["nikah.pdf"]["Saksi 1"] == "E, BIN F"
+    assert rows["nikah.pdf"]["Saksi 2"] == "G, BIN H"
+    assert rows["cerai.pdf"]["No Siri"] == ""
+    assert rows["cerai.pdf"]["Saksi 1"] == ""
+    assert rows["cerai.pdf"]["Saksi 2"] == ""
+
+
+def test_typed_csv_blanks_tarikh_keluar_on_cerai_rows_only(tmp_path: Path) -> None:
+    # Tarikh Keluar is real, populated data for typed Nikah and Rujuk alike
+    # -- per explicit client request, pure clutter for Cerai specifically.
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(
+                record_type="RUJUK",
+                bil="01/2009",
+                nama_suami="A, BIN B",
+                tarikh_keluar="01-01-2020",
+            ),
+            source_file="rujuk.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.upsert(
+        TypedDocumentResult(
+            record=ExtractedRecord(
+                record_type="CERAI",
+                bil="02/2009",
+                nama_suami="C, BIN D",
+                tarikh_keluar="02-02-2020",
+            ),
+            source_file="cerai.pdf",
+            processing_status=ProcessingStatus.SUCCESS,
+        )
+    )
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        rows = {row["Source File"]: row for row in csv.DictReader(handle)}
+
+    assert rows["rujuk.pdf"]["Tarikh Keluar"] == "01-01-2020"
+    assert rows["cerai.pdf"]["Tarikh Keluar"] == ""
 
 
 def test_blank_umur_shows_tiada_maklumat_on_nikah_modern_rows(tmp_path: Path) -> None:
