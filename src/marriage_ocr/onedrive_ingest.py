@@ -53,6 +53,7 @@ import zipfile
 from email.message import Message
 from io import BytesIO
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -116,7 +117,16 @@ _SIGNIN_REQUIRED_MESSAGE = (
 )
 
 
-def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]:
+def _normalize_only(only: Iterable[str] | None) -> set[str] | None:
+    """Case-insensitive set of the file names `only` asks for, or None for
+    "everything" (an empty `only` also means everything)."""
+    names = {name.strip().lower() for name in only or () if name.strip()}
+    return names or None
+
+
+def download_anonymous_share(
+    share_url: str, dest_dir: str | Path, *, only: Iterable[str] | None = None
+) -> list[Path]:
     """Download a OneDrive/SharePoint share link with a plain, unauthenticated
     HTTP GET -- no Entra ID app registration, no sign-in, no client-id.
 
@@ -132,7 +142,16 @@ def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]
     for the folder shapes that come back as an HTML page instead of either
     of those despite not touching a sign-in host, falls back to a real
     headless-browser session (see the module docstring).
+
+    `only` restricts the fetch to those file names (matched on the file's
+    own name, case-insensitively, anywhere in the folder tree) -- how
+    marriage-be re-fetches just the few files a previous run lost, rather
+    than the whole share. The browser path downloads only the matching rows
+    and stops as soon as they've all been found; a zip-shaped folder link
+    can only be downloaded whole (OneDrive offers no per-file anonymous
+    endpoint for it), but only the matching entries are extracted.
     """
+    wanted = _normalize_only(only)
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -162,7 +181,7 @@ def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]
             "falling back to a headless-browser download.",
             share_url,
         )
-        return _download_via_browser(share_url, dest_dir)
+        return _download_via_browser(share_url, dest_dir, only=wanted)
 
     filename = _filename_from_response(response, fallback="download")
     content_type = response.headers.get("Content-Type", "")
@@ -183,6 +202,8 @@ def download_anonymous_share(share_url: str, dest_dir: str | Path) -> list[Path]
         with zipfile.ZipFile(buffer) as archive:
             for info in archive.infolist():
                 if info.is_dir():
+                    continue
+                if wanted is not None and Path(info.filename).name.lower() not in wanted:
                     continue
                 target = dest_dir / info.filename
                 if target.exists() and target.stat().st_size == info.file_size:
@@ -303,7 +324,9 @@ def _next_unprocessed_row(page: Any, seen: set[str]) -> tuple[str, Any] | None:
         page.wait_for_timeout(400)
 
 
-def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0) -> list[Path]:
+def _download_all_rows_via_browser(
+    page: Any, dest_dir: Path, *, _depth: int = 0, remaining: set[str] | None = None
+) -> list[Path]:
     """Folder-listing shape: one row per file or sub-folder, each with its
     own "..." (Show more actions) menu. Downloads each file individually via
     that per-row menu's "Download" item -- not the shared multi-select
@@ -322,6 +345,13 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
     destination directory when retrying a failed OneDrive submission (see
     onedrive/service.py::run_onedrive_fetch, which only deletes it on
     success).
+
+    `remaining` (lower-cased file names; None = everything) limits the pull
+    to just those files. It's shared across the whole recursion and
+    shrinks as each one is saved, so the walk stops -- at every level -- as
+    soon as the last wanted file has been found, instead of listing the
+    rest of a possibly huge tree for nothing. Sub-folders still have to be
+    entered, since a wanted file could be in any of them.
     """
     if _depth > _MAX_BROWSER_FOLDER_DEPTH:
         LOGGER.warning(
@@ -336,6 +366,8 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
     seen: set[str] = set()
 
     while len(seen) < _MAX_BROWSER_DOWNLOAD_ITEMS:
+        if remaining is not None and not remaining:
+            break
         found = _next_unprocessed_row(page, seen)
         if found is None:
             break
@@ -356,8 +388,12 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
                 page.wait_for_load_state("networkidle", timeout=30_000)
                 page.wait_for_timeout(1000)  # let the new listing's rows settle
                 downloaded.extend(
-                    _download_all_rows_via_browser(page, dest_dir / name, _depth=_depth + 1)
+                    _download_all_rows_via_browser(
+                        page, dest_dir / name, _depth=_depth + 1, remaining=remaining
+                    )
                 )
+                if remaining is not None and not remaining:
+                    break
                 # Re-fetching the row list (rather than trying to resume the
                 # one we navigated away from) after returning from a
                 # sub-folder resets the virtualized listing to the top --
@@ -365,6 +401,9 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
                 # past everything already handled instead of redoing it.
                 page.goto(listing_url, wait_until="networkidle", timeout=30_000)
                 page.wait_for_timeout(1000)
+                continue
+
+            if remaining is not None and name.lower() not in remaining:
                 continue
 
             target = dest_dir / name
@@ -377,6 +416,8 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
                 # because a file only ever exists at `target` once fully
                 # written (see the temp-path rename below), never mid-write.
                 downloaded.append(target)
+                if remaining is not None:
+                    remaining.discard(name.lower())
                 continue
 
             more_button = row.get_by_label("More Actions", exact=True)
@@ -400,6 +441,8 @@ def _download_all_rows_via_browser(page: Any, dest_dir: Path, *, _depth: int = 0
             download.save_as(tmp_target)
             tmp_target.replace(target)
             downloaded.append(target)
+            if remaining is not None:
+                remaining.discard(name.lower())
         except Exception:
             # One stuck/overlay-covered row shouldn't sacrifice every other
             # item in the folder -- log and move on to the next row.
@@ -431,7 +474,9 @@ def _download_single_item_via_browser(page: Any, dest_dir: Path) -> list[Path]:
     return [target]
 
 
-def _download_via_browser(share_url: str, dest_dir: Path) -> list[Path]:
+def _download_via_browser(
+    share_url: str, dest_dir: Path, *, only: set[str] | None = None
+) -> list[Path]:
     """Render `share_url` in a real headless browser and pull its files out
     through OneDrive's own web UI, for the ambiguous "HTML but not a sign-in
     redirect" case `download_anonymous_share` can't resolve with a plain GET.
@@ -468,7 +513,13 @@ def _download_via_browser(share_url: str, dest_dir: Path) -> list[Path]:
             if _url_is_signin_host(page.url):
                 raise RuntimeError(_SIGNIN_REQUIRED_MESSAGE)
 
-            downloaded = _download_all_rows_via_browser(page, dest_dir)
+            remaining = set(only) if only is not None else None
+            downloaded = _download_all_rows_via_browser(page, dest_dir, remaining=remaining)
+            if only is not None:
+                # A filtered pull legitimately finding nothing (the file was
+                # removed from the share) isn't an unrecognized page -- the
+                # caller reports which names are missing.
+                return downloaded
             if not downloaded:
                 downloaded = _download_single_item_via_browser(page, dest_dir)
             if not downloaded:

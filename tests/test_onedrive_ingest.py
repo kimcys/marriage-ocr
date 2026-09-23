@@ -211,7 +211,7 @@ def test_download_anonymous_share_falls_back_to_browser_for_html_non_signin_resp
 
     fallback_calls: list[tuple[str, Path]] = []
 
-    def fake_browser_fallback(share_url, dest_dir):
+    def fake_browser_fallback(share_url, dest_dir, only=None):
         fallback_calls.append((share_url, dest_dir))
         return [dest_dir / "recovered.pdf"]
 
@@ -617,3 +617,50 @@ def test_next_unprocessed_row_scrolls_virtualized_container_to_find_all_rows():
 
     assert discovered == names
     assert onedrive_ingest._next_unprocessed_row(page, seen) is None
+
+
+def test_download_all_rows_via_browser_only_downloads_the_requested_files(tmp_path: Path):
+    tree = _Node(
+        "root",
+        True,
+        [
+            _Node("SubA", True, [_Node("wanted_a.jpg", False), _Node("other_a.jpg", False)]),
+            _Node("other_root.jpg", False),
+            _Node("Wanted_Root.JPG", False),
+        ],
+    )
+    page = _FakeNestedFolderPage(tree)
+    remaining = {"wanted_a.jpg", "wanted_root.jpg"}
+
+    downloaded = onedrive_ingest._download_all_rows_via_browser(page, tmp_path, remaining=remaining)
+
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in downloaded) == [
+        "SubA/wanted_a.jpg",
+        "Wanted_Root.JPG",
+    ]
+    assert not (tmp_path / "SubA" / "other_a.jpg").exists()
+    assert not (tmp_path / "other_root.jpg").exists()
+    assert remaining == set()
+
+
+def test_download_anonymous_share_zip_only_extracts_requested_files(monkeypatch, tmp_path: Path):
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("page1.jpg", b"jpg-bytes")
+        archive.writestr("sub/page2.jpg", b"jpg-bytes-2")
+    resolve_response = _FakeResponse("https://contoso-my.sharepoint.com/:f:/g/personal/x/AbCdEf?e=1")
+    download_response = _FakeResponse(
+        "https://contoso-my.sharepoint.com/:f:/g/personal/x/AbCdEf?e=1&download=1",
+        headers={
+            "Content-Disposition": 'attachment; filename="folder.zip"',
+            "Content-Type": "application/zip",
+        },
+        content=buffer.getvalue(),
+    )
+    calls = iter([resolve_response, download_response])
+    monkeypatch.setattr(onedrive_ingest.requests, "get", lambda *a, **kw: next(calls))
+
+    downloaded = download_anonymous_share("https://1drv.ms/f/s!AbCdEf", tmp_path, only=["PAGE2.jpg"])
+
+    assert [p.relative_to(tmp_path).as_posix() for p in downloaded] == ["sub/page2.jpg"]
+    assert not (tmp_path / "page1.jpg").exists()

@@ -500,6 +500,11 @@ def export_training(
 def onedrive_fetch_public(
     url: str = typer.Option(..., "--url", help="OneDrive/SharePoint sharing link"),
     dest: Path = typer.Option(..., "--dest", help="Local folder to save the downloaded file(s) into"),
+    only: list[str] = typer.Option(
+        [],
+        "--only",
+        help="Only fetch the file with this name (repeatable); default fetches everything",
+    ),
 ) -> None:
     """Download a link shared as "Anyone with the link" with a plain HTTP
     GET -- no Microsoft sign-in, no Entra ID app registration, no
@@ -513,7 +518,10 @@ def onedrive_fetch_public(
     console.print(f"URL: {url}")
     console.print(f"Dest: {dest}")
 
-    downloaded = download_anonymous_share(url, dest)
+    if only:
+        console.print(f"Only: {', '.join(only)}")
+
+    downloaded = download_anonymous_share(url, dest, only=only or None)
 
     console.print(f"[bold green]Downloaded {len(downloaded)} file(s) to {dest}[/bold green]")
 
