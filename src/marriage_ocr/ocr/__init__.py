@@ -150,6 +150,12 @@ class GoogleVisionOcrEngine(OcrEngine):
             ) from exc
 
     def read_image(self, image_path: str | Path) -> OcrResult:
+        return self.read_image_annotated(image_path)[0]
+
+    def read_image_annotated(self, image_path: str | Path) -> tuple[OcrResult, object]:
+        """Like read_image, plus the raw full_text_annotation -- for a caller
+        that also needs word bounding boxes from the same (single, billed)
+        call, e.g. triage.classify_file saving page 1 for process-typed."""
         path = Path(image_path)
         content = path.read_bytes()
         image = self._vision.Image(content=content)
@@ -160,7 +166,8 @@ class GoogleVisionOcrEngine(OcrEngine):
         if response.error.message:
             raise RuntimeError(f"Google Vision OCR failed for {path.name}: {response.error.message}")
 
-        return _google_vision_annotation_to_word_result(response.full_text_annotation)
+        annotation = response.full_text_annotation
+        return _google_vision_annotation_to_word_result(annotation), annotation
 
     def _call_with_retry(self, *, image: object, image_context: object) -> object:
         """Retry a single Vision call with exponential backoff on transient errors.

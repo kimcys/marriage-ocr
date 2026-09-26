@@ -188,26 +188,49 @@ def classify_file(
     allowed_extensions: Sequence[str],
     pdf_dpi: int = 300,
     jawi_proportion_threshold: float = DEFAULT_JAWI_PROPORTION_THRESHOLD,
+    page_ocr_output: Path | None = None,
 ) -> Classification:
     """Classify a file by its first page. A scanned ledger book stays one
     record_type/layout throughout; a typed certificate PDF is inherently one
-    record -- so the first page is representative of the whole file."""
-    pages = load_document_pages(Path(file_path), list(allowed_extensions), pdf_dpi=pdf_dpi)
+    record -- so the first page is representative of the whole file.
+
+    With `page_ocr_output`, a PDF's page 1 is sent as the exact PNG
+    process-typed would render and send itself, and -- if it classifies as a
+    non-Jawi typed document -- its `ms/en` Vision result is saved there for
+    `process-typed --page1-ocr` to reuse (see typed/page_ocr_cache.py)."""
+    file_path = Path(file_path)
+    pages = load_document_pages(file_path, list(allowed_extensions), pdf_dpi=pdf_dpi)
     if not pages:
         return Classification("unknown", None, None, False, 0.0, ["no pages found"])
 
     page = pages[0]
+    save_page_ocr = page_ocr_output is not None and file_path.suffix.lower() == ".pdf"
     with tempfile.TemporaryDirectory(prefix="marriage-ocr-triage-") as tmp_dir:
-        page_path = Path(tmp_dir) / "page.jpg"
+        page_path = Path(tmp_dir) / ("page.png" if save_page_ocr else "page.jpg")
         write_image(page_path, page.image)
 
-        primary_result = GoogleVisionOcrEngine({"language_hints": ["ms", "en"]}).read_image(page_path)
+        primary_result, primary_annotation = GoogleVisionOcrEngine(
+            {"language_hints": ["ms", "en"]}
+        ).read_image_annotated(page_path)
         jawi_result = GoogleVisionOcrEngine({"language_hints": ["ar"]}).read_image(page_path)
 
     is_jawi, jawi_proportion, jawi_notes = _assess_jawi(
         primary_result, jawi_result, jawi_proportion_threshold
     )
     doc_type, record_type, layout_variant, header_notes = _classify_headers(primary_result.text)
+
+    if save_page_ocr and page_ocr_output is not None and doc_type == "typed" and not is_jawi:
+        from marriage_ocr.typed.page_ocr_cache import write_page_ocr_cache
+        from marriage_ocr.typed.vision import annotation_to_page_result
+
+        height, width = page.image.shape[:2]
+        write_page_ocr_cache(
+            page_ocr_output,
+            annotation_to_page_result(primary_annotation, source_file=file_path.name, page_number=1),
+            dpi=pdf_dpi,
+            width=width,
+            height=height,
+        )
 
     return Classification(
         doc_type=doc_type,

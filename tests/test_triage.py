@@ -271,3 +271,71 @@ def test_classification_is_a_plain_dataclass_with_expected_fields():
         jawi_proportion=0.0,
     )
     assert classification.notes == []
+
+
+class _FakeVisionEngine:
+    """Stands in for GoogleVisionOcrEngine: returns `text` for every call and
+    records the image each call was sent."""
+
+    sent: list = []
+
+    def __init__(self, config):
+        self._hints = config["language_hints"]
+
+    def read_image_annotated(self, image_path):
+        from types import SimpleNamespace
+
+        _FakeVisionEngine.sent.append((self._hints, image_path.suffix))
+        word = SimpleNamespace(
+            symbols=[SimpleNamespace(text="NIKAH")],
+            confidence=0.9,
+            bounding_box=SimpleNamespace(vertices=[SimpleNamespace(x=x, y=y) for x, y in [(10, 10), (60, 10), (60, 30), (10, 30)]]),
+        )
+        page = SimpleNamespace(
+            width=2480, height=3509, blocks=[SimpleNamespace(paragraphs=[SimpleNamespace(words=[word])])]
+        )
+        text = _FakeVisionEngine.text
+        return OcrResult(text=text), SimpleNamespace(pages=[page], text=text)
+
+    def read_image(self, image_path):
+        return self.read_image_annotated(image_path)[0]
+
+
+def _classify_pdf(tmp_path, monkeypatch, text):
+    import pymupdf
+
+    pdf = tmp_path / "doc.pdf"
+    document = pymupdf.open()
+    document.new_page(width=595, height=842)
+    document.new_page(width=595, height=842)
+    document.save(pdf)
+    document.close()
+    _FakeVisionEngine.sent = []
+    _FakeVisionEngine.text = text
+    monkeypatch.setattr(triage, "GoogleVisionOcrEngine", _FakeVisionEngine)
+    output = tmp_path / "page1.json"
+    result = triage.classify_file(pdf, allowed_extensions=[".pdf"], page_ocr_output=output)
+    return result, output
+
+
+def test_classify_saves_page1_ocr_for_a_typed_pdf(tmp_path, monkeypatch):
+    from marriage_ocr.typed.page_ocr_cache import load_page_ocr_cache
+
+    result, output = _classify_pdf(
+        tmp_path, monkeypatch, "ENAKMEN UNDANG-UNDANG KELUARGA ISLAM NO. 2 TAHUN 2003\nBORANG 4B\nSURAT PERAKUAN NIKAH"
+    )
+
+    assert result.doc_type == "typed"
+    # Still 2 Vision calls (ms/en + ar), both on the lossless PNG process-typed itself sends.
+    assert _FakeVisionEngine.sent == [(["ms", "en"], ".png"), (["ar"], ".png")]
+    cached = load_page_ocr_cache(output, source_file="source.pdf")
+    assert cached is not None
+    assert cached.matches(dpi=300, width=2480, height=3509)
+    assert [word.text for word in cached.result.words] == ["NIKAH"]
+
+
+def test_classify_saves_nothing_for_a_handwritten_pdf(tmp_path, monkeypatch):
+    result, output = _classify_pdf(tmp_path, monkeypatch, "DAFTAR PERKAHWINAN ORANG ISLAM")
+
+    assert result.doc_type == "handwritten"
+    assert not output.exists()

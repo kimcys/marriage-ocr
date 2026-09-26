@@ -89,6 +89,11 @@ def main() -> None:
 @app.command("classify")
 def classify(
     input: Path = typer.Option(..., "--input", "-i", help="Input image or PDF to classify"),
+    page_ocr_output: Path | None = typer.Option(
+        None,
+        "--page-ocr-output",
+        help="If the file is a typed PDF, save its page-1 Vision result here for `process-typed --page1-ocr`",
+    ),
 ) -> None:
     """Classify one file's doc_type/record_type/layout_variant and print the
     result -- plus which config it would route to, if any -- as one JSON
@@ -107,7 +112,9 @@ def classify(
     if not input.exists():
         raise typer.BadParameter(f"Input path does not exist: {input}")
 
-    classification = triage.classify_file(input, allowed_extensions=sorted(SUPPORTED_EXTENSIONS))
+    classification = triage.classify_file(
+        input, allowed_extensions=sorted(SUPPORTED_EXTENSIONS), page_ocr_output=page_ocr_output
+    )
 
     result: dict[str, Any] = {
         "doc_type": classification.doc_type,
@@ -359,6 +366,11 @@ def process_typed(
     ),
     reset_output: bool = typer.Option(False, "--reset-output", help="Delete old typed CSV before processing"),
     skip_existing: bool = typer.Option(False, "--skip-existing", help="Skip typed rows already processed successfully"),
+    page1_ocr: Path | None = typer.Option(
+        None,
+        "--page1-ocr",
+        help="Page-1 Vision result saved by `classify --page-ocr-output` for this (single-file) input; reused instead of OCRing page 1 again",
+    ),
 ) -> None:
     runtime: LoggingRuntime | None = None
 
@@ -400,6 +412,7 @@ def process_typed(
             reset_output=reset_output,
             skip_existing=skip_existing,
             retain_debug_artifacts=retain_debug_artifacts,
+            page1_ocr_path=page1_ocr,
         )
         console.print(
             f"Typed OCR complete: discovered={result.discovered_pdfs} written={result.written_rows} skipped={len(result.skipped_files)}"

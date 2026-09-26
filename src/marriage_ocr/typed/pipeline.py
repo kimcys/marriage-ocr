@@ -28,6 +28,7 @@ from marriage_ocr.typed.models import (
     ValidationSummary,
 )
 from marriage_ocr.typed.normalizer import build_extracted_record
+from marriage_ocr.typed.page_ocr_cache import CachedPageOcr, load_page_ocr_cache
 from marriage_ocr.typed.retry import create_retry_crops, extract_retry_raw_fields, prefer_retry_value
 from marriage_ocr.typed.template import TEMPLATES
 from marriage_ocr.typed.validator import status_for_result, validate_record
@@ -363,6 +364,7 @@ def _process_micro_batch(
     template_name: str = "borang_4b",
     record_type: str = "NIKAH",
     retain_debug_artifacts: bool = True,
+    precomputed_page_ocr: Mapping[str, CachedPageOcr] | None = None,
 ) -> tuple[TypedDocumentResult, ...]:
     render_workers = max(1, int(typed_cfg.get("render_workers", 4)))
     expected_pages = int(TEMPLATES[template_name]["pages"])
@@ -386,18 +388,38 @@ def _process_micro_batch(
                 rendered[source_file] = None
                 errors[source_file] = str(error)
 
+    # Pages whose Vision result `classify` already paid for (see
+    # typed/page_ocr_cache.py) -- only when it came from an identical render.
+    reused: dict[tuple[str, int], PageOcrResult] = {}
+    dpi = int(typed_cfg.get("pdf_dpi", 300))
+    for pdf in pdfs:
+        cached = (precomputed_page_ocr or {}).get(pdf.name)
+        pages = rendered.get(pdf.name)
+        if cached is None or pages is None:
+            continue
+        page = next((p for p in pages if p.page_number == cached.result.page_number), None)
+        if page is not None and cached.matches(dpi=dpi, width=page.width, height=page.height):
+            reused[(pdf.name, page.page_number)] = cached.result
+        else:
+            LOGGER.info("Not reusing classify's page OCR for %s: render doesn't match", pdf.name)
+
     ordered_pages: list[RenderedPage] = []
     for pdf in pdfs:
         pages = rendered.get(pdf.name)
         if pages is None:
             continue
-        ordered_pages.extend(sorted(pages, key=lambda page: page.page_number))
+        ordered_pages.extend(
+            page
+            for page in sorted(pages, key=lambda page: page.page_number)
+            if (pdf.name, page.page_number) not in reused
+        )
 
     ocr_results_by_page: dict[tuple[str, int], PageOcrResult] | None = None
     try:
+        ocr_results_by_page = dict(reused)
         if ordered_pages:
             ocr_results = _ocr_micro_batch(ordered_pages, client)
-            ocr_results_by_page = {(result.source_file, result.page_number): result for result in ocr_results}
+            ocr_results_by_page.update({(result.source_file, result.page_number): result for result in ocr_results})
     except Exception as bulk_error:
         # The bulk call covers every PDF in this micro-batch at once, so one
         # bad request (or a response-count mismatch -- see
@@ -408,10 +430,13 @@ def _process_micro_batch(
         # recorded anywhere -- see errors[pdf.name] below, which is what
         # actually reaches the CSV's Error Message column.
         LOGGER.warning("Bulk Vision OCR call failed for micro-batch, retrying per-PDF: %s", bulk_error)
-        ocr_results_by_page = {}
+        ocr_results_by_page = dict(reused)
         for pdf in pdfs:
             pages = rendered.get(pdf.name)
             if pages is None:
+                continue
+            pages = tuple(page for page in pages if (pdf.name, page.page_number) not in reused)
+            if not pages:
                 continue
             try:
                 results = _ocr_micro_batch(pages, client)
@@ -473,6 +498,7 @@ def _run_typed_micro_batches(
     on_results: Callable[[list[TypedDocumentResult]], None],
     progress_callback: ProgressCallback | None = None,
     retain_debug_artifacts: bool | None = None,
+    precomputed_page_ocr: Mapping[str, CachedPageOcr] | None = None,
 ) -> list[TypedDocumentResult]:
     """Shared OCR+parse+validate core, config-sized micro-batch at a time.
 
@@ -534,6 +560,7 @@ def _run_typed_micro_batches(
                 template_name=template_name,
                 record_type=record_type,
                 retain_debug_artifacts=retain_debug_artifacts,
+                precomputed_page_ocr=precomputed_page_ocr,
             )
             on_results(list(batch_results))
             completed.extend(batch_results)
@@ -583,8 +610,20 @@ def process_typed_input(
     skip_existing: bool = False,
     progress_callback: ProgressCallback | None = None,
     retain_debug_artifacts: bool | None = None,
+    page1_ocr_path: Path | None = None,
 ) -> TypedBatchResult:
+    """`page1_ocr_path` (single-file input only): classify's saved page-1
+    Vision result for that file, reused instead of a second Vision call."""
     pdfs = discover_typed_pdfs(input_path)
+    precomputed_page_ocr: dict[str, CachedPageOcr] = {}
+    if page1_ocr_path is not None:
+        if not input_path.is_file():
+            raise ValueError("--page1-ocr only applies to a single input PDF, not a folder")
+        cached = load_page_ocr_cache(page1_ocr_path, source_file=input_path.name)
+        if cached is not None:
+            precomputed_page_ocr[input_path.name] = cached
+        else:
+            LOGGER.warning("Ignoring unreadable page-1 OCR file %s", page1_ocr_path)
     store = TypedCsvStore.load(
         output_path,
         reset_output=reset_output,
@@ -605,6 +644,7 @@ def process_typed_input(
         on_results=_persist,
         progress_callback=progress_callback,
         retain_debug_artifacts=retain_debug_artifacts,
+        precomputed_page_ocr=precomputed_page_ocr,
     )
 
     ordered = tuple(sorted(completed, key=lambda result: result.source_file.casefold()))
