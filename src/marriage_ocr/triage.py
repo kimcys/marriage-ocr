@@ -212,12 +212,19 @@ def classify_file(
         primary_result, primary_annotation = GoogleVisionOcrEngine(
             {"language_hints": ["ms", "en"]}
         ).read_image_annotated(page_path)
-        jawi_result = GoogleVisionOcrEngine({"language_hints": ["ar"]}).read_image(page_path)
+        doc_type, record_type, layout_variant, header_notes = _classify_headers(primary_result.text)
+        # A matched typed-form title means a printed Rumi form, never an
+        # all-Jawi page -- skip the (billed) ar-hinted pass for it and judge
+        # Jawi proportion from the ms/en pass alone. Handwritten/unknown
+        # pages still get both passes (see module docstring for why).
+        if doc_type == "typed":
+            jawi_result = OcrResult()
+        else:
+            jawi_result = GoogleVisionOcrEngine({"language_hints": ["ar"]}).read_image(page_path)
 
     is_jawi, jawi_proportion, jawi_notes = _assess_jawi(
         primary_result, jawi_result, jawi_proportion_threshold
     )
-    doc_type, record_type, layout_variant, header_notes = _classify_headers(primary_result.text)
 
     if save_page_ocr and page_ocr_output is not None and doc_type == "typed" and not is_jawi:
         from marriage_ocr.typed.page_ocr_cache import write_page_ocr_cache

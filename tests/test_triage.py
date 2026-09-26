@@ -326,8 +326,9 @@ def test_classify_saves_page1_ocr_for_a_typed_pdf(tmp_path, monkeypatch):
     )
 
     assert result.doc_type == "typed"
-    # Still 2 Vision calls (ms/en + ar), both on the lossless PNG process-typed itself sends.
-    assert _FakeVisionEngine.sent == [(["ms", "en"], ".png"), (["ar"], ".png")]
+    # One Vision call -- no ar-hinted Jawi pass for a typed form -- on the
+    # lossless PNG process-typed itself sends.
+    assert _FakeVisionEngine.sent == [(["ms", "en"], ".png")]
     cached = load_page_ocr_cache(output, source_file="source.pdf")
     assert cached is not None
     assert cached.matches(dpi=300, width=2480, height=3509)
@@ -339,3 +340,5 @@ def test_classify_saves_nothing_for_a_handwritten_pdf(tmp_path, monkeypatch):
 
     assert result.doc_type == "handwritten"
     assert not output.exists()
+    # Handwritten pages keep the ar-hinted Jawi pass.
+    assert [hints for hints, _ in _FakeVisionEngine.sent] == [["ms", "en"], ["ar"]]
