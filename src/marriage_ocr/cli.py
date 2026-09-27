@@ -107,7 +107,7 @@ def classify(
     stay the single source of truth for what routes where.
     """
     from marriage_ocr import triage
-    from marriage_ocr.batch_runner import ROUTING_TABLE, SUPPORTED_EXTENSIONS
+    from marriage_ocr.batch_runner import SUPPORTED_EXTENSIONS
 
     if not input.exists():
         raise typer.BadParameter(f"Input path does not exist: {input}")
@@ -115,6 +115,31 @@ def classify(
     classification = triage.classify_file(
         input, allowed_extensions=sorted(SUPPORTED_EXTENSIONS), page_ocr_output=page_ocr_output
     )
+    print(json.dumps(_classification_payload(classification), ensure_ascii=False))
+
+
+@app.command("classify-stack")
+def classify_stack(
+    inputs: list[Path] = typer.Option(..., "--input", "-i", help="1-3 single-image files, classified in one stacked image"),
+) -> None:
+    """Like `classify`, for up to 3 image files at once: one JSON array on
+    stdout, one object per --input in the same order. Costs the same two
+    Vision calls as classifying ONE file (see triage.classify_files_stacked).
+    Exits non-zero (nothing printed) if the stack can't be built or sent --
+    the caller then classifies those files one by one."""
+    from marriage_ocr import triage
+    from marriage_ocr.batch_runner import SUPPORTED_EXTENSIONS
+
+    for path in inputs:
+        if not path.exists():
+            raise typer.BadParameter(f"Input path does not exist: {path}")
+
+    classifications = triage.classify_files_stacked(inputs, allowed_extensions=sorted(SUPPORTED_EXTENSIONS))
+    print(json.dumps([_classification_payload(c) for c in classifications], ensure_ascii=False))
+
+
+def _classification_payload(classification: Any) -> dict[str, Any]:
+    from marriage_ocr.batch_runner import ROUTING_TABLE
 
     result: dict[str, Any] = {
         "doc_type": classification.doc_type,
@@ -139,8 +164,7 @@ def classify(
         else:
             result["status"] = "ROUTABLE"
             result["config_path"] = routed_config
-
-    print(json.dumps(result, ensure_ascii=False))
+    return result
 
 
 @app.command()

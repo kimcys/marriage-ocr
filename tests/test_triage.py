@@ -342,3 +342,81 @@ def test_classify_saves_nothing_for_a_handwritten_pdf(tmp_path, monkeypatch):
     assert not output.exists()
     # Handwritten pages keep the ar-hinted Jawi pass.
     assert [hints for hints, _ in _FakeVisionEngine.sent] == [["ms", "en"], ["ar"]]
+
+
+def _write_jpg(path, height):
+    import cv2
+    import numpy as np
+
+    cv2.imwrite(str(path), np.full((height, 400, 3), 255, dtype=np.uint8))
+
+
+class _FakeStackClient:
+    """Stands in for TypedVisionClient: returns one word per band (by the
+    stacked image's normalized y), text chosen per band index."""
+
+    calls: list = []
+    band_words: dict = {}
+
+    def __init__(self, language_hints):
+        self._hints = tuple(language_hints)
+
+    def annotate_image_paths(self, items):
+        from marriage_ocr.typed.models import PageOcrResult, PositionedWord
+
+        _FakeStackClient.calls.append(self._hints)
+        words = tuple(
+            PositionedWord(text, 0.9, 0.1, y1, 0.5, y2, 1)
+            for (y1, y2), text in _FakeStackClient.band_words[self._hints]
+        )
+        return (PageOcrResult(items[0][0], 1, words, "", {}),)
+
+
+def test_stacked_classify_judges_each_page_from_its_own_band(tmp_path, monkeypatch):
+    import marriage_ocr.typed.vision as vision
+
+    heights = [100, 100, 100]
+    files = []
+    for index, height in enumerate(heights):
+        path = tmp_path / f"page{index}.jpg"
+        _write_jpg(path, height)
+        files.append(path)
+    # Stacked height = 3*100 + 2*80 gap = 460; band centres at y ~ 50, 230, 410.
+    _FakeStackClient.calls = []
+    _FakeStackClient.band_words = {
+        ("ms", "en"): [
+            ((40 / 460, 60 / 460), "DAFTAR PERKAHWINAN ORANG ISLAM"),
+            ((220 / 460, 240 / 460), "DAFTAR PERCERAIAN ORANG ISLAM CATATAN"),
+            ((400 / 460, 420 / 460), "DAFTAR RUJUK ORANG ISLAM"),
+        ],
+        ("ar",): [],
+    }
+    monkeypatch.setattr(vision, "TypedVisionClient", _FakeStackClient)
+
+    results = triage.classify_files_stacked(files, allowed_extensions=[".jpg"])
+
+    assert [(r.doc_type, r.record_type, r.layout_variant, r.is_jawi) for r in results] == [
+        ("handwritten", "nikah", "legacy", False),
+        ("handwritten", "cerai", "modern", False),
+        ("handwritten", "rujuk", "legacy", False),
+    ]
+    # Two Vision calls for the whole stack -- the same as ONE per-file classify.
+    assert _FakeStackClient.calls == [("ms", "en"), ("ar",)]
+
+
+def test_stacked_classify_rejects_pdfs_and_oversized_stacks(tmp_path, monkeypatch):
+    import pytest
+
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    with pytest.raises(ValueError, match="single-image"):
+        triage.classify_files_stacked([pdf], allowed_extensions=[".pdf"])
+
+    image = tmp_path / "page.jpg"
+    _write_jpg(image, 100)
+    monkeypatch.setattr(triage, "MAX_STACK_JPEG_BYTES", 10)
+    with pytest.raises(triage.StackTooLargeError):
+        triage.classify_files_stacked([image], allowed_extensions=[".jpg"])
+
+    with pytest.raises(ValueError, match="1-3"):
+        triage.classify_files_stacked([image] * 4, allowed_extensions=[".jpg"])

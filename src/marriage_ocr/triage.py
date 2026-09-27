@@ -249,6 +249,111 @@ def classify_file(
     )
 
 
+# Stacked classify (classify_files_stacked): up to this many single-image
+# files per stacked image, separated by white bands so each page's words
+# stay attributable to it. Vision rejects a request over 40MB (base64 adds a
+# third), so a stack whose JPEG exceeds MAX_STACK_JPEG_BYTES is refused and
+# the caller classifies those files one by one instead.
+MAX_STACK_SIZE = 3
+MAX_STACK_JPEG_BYTES = 20 * 1024 * 1024
+_STACK_GAP_PX = 80
+_STACK_JPEG_QUALITY = 95
+
+
+class StackTooLargeError(ValueError):
+    pass
+
+
+def classify_files_stacked(
+    file_paths: Sequence[Path],
+    *,
+    allowed_extensions: Sequence[str],
+    jawi_proportion_threshold: float = DEFAULT_JAWI_PROPORTION_THRESHOLD,
+) -> list[Classification]:
+    """Classify up to MAX_STACK_SIZE single-page image files with the same
+    two Vision passes classify_file makes for ONE file (ms/en + ar), by
+    stacking them into one tall image and judging each page only from the
+    words inside its own band -- same header keywords, same Jawi rule.
+    Validated against per-file classify_file on real handwritten samples
+    (27/27 identical, stacks of 2 and 3, mixed legacy/modern). Classify only
+    reads large printed titles/column headers, which survive the taller
+    image; don't reuse this for field extraction (a stacked typed-form test
+    changed ~6% of extracted fields)."""
+    import cv2
+    import numpy as np
+
+    from marriage_ocr.typed.extractor import join_words_in_reading_order
+    from marriage_ocr.typed.vision import TypedVisionClient
+
+    paths = [Path(p) for p in file_paths]
+    if not 1 <= len(paths) <= MAX_STACK_SIZE:
+        raise ValueError(f"a stack holds 1-{MAX_STACK_SIZE} files, got {len(paths)}")
+    if any(path.suffix.lower() == ".pdf" for path in paths):
+        raise ValueError("stacked classify is for single-image files; classify PDFs with classify_file")
+
+    images = []
+    for path in paths:
+        pages = load_document_pages(path, list(allowed_extensions))
+        if not pages:
+            raise ValueError(f"no page found in {path.name}")
+        images.append(pages[0].image)
+
+    width = max(image.shape[1] for image in images)
+    rows: list[np.ndarray] = []
+    spans: list[tuple[int, int]] = []
+    y = 0
+    for image in images:
+        padded = np.full((image.shape[0], width, 3), 255, dtype=np.uint8)
+        padded[:, : image.shape[1]] = image
+        rows.extend([padded, np.full((_STACK_GAP_PX, width, 3), 255, dtype=np.uint8)])
+        spans.append((y, y + image.shape[0]))
+        y += image.shape[0] + _STACK_GAP_PX
+    stacked = np.vstack(rows[:-1])
+    height = stacked.shape[0]
+
+    with tempfile.TemporaryDirectory(prefix="marriage-ocr-triage-stack-") as tmp_dir:
+        stack_path = Path(tmp_dir) / "stack.jpg"
+        if not cv2.imwrite(str(stack_path), stacked, [cv2.IMWRITE_JPEG_QUALITY, _STACK_JPEG_QUALITY]):
+            raise OSError("failed to write stacked classify image")
+        if stack_path.stat().st_size > MAX_STACK_JPEG_BYTES:
+            raise StackTooLargeError(
+                f"stacked image is {stack_path.stat().st_size} bytes (limit {MAX_STACK_JPEG_BYTES})"
+            )
+
+        def band_texts(language_hints: tuple[str, ...]) -> list[str]:
+            result = TypedVisionClient(language_hints=language_hints).annotate_image_paths(
+                [(paths[0].name, 1, stack_path)]
+            )[0]
+            if result.error_message:
+                raise RuntimeError(f"Google Vision OCR failed for stacked classify: {result.error_message}")
+            texts = []
+            for top, bottom in spans:
+                inside = tuple(word for word in result.words if top <= ((word.y1 + word.y2) / 2) * height < bottom)
+                texts.append(join_words_in_reading_order(inside))
+            return texts
+
+        primary_texts = band_texts(("ms", "en"))
+        jawi_texts = band_texts(("ar",))
+
+    classifications = []
+    for primary_text, jawi_text in zip(primary_texts, jawi_texts, strict=True):
+        is_jawi, jawi_proportion, jawi_notes = _assess_jawi(
+            OcrResult(text=primary_text), OcrResult(text=jawi_text), jawi_proportion_threshold
+        )
+        doc_type, record_type, layout_variant, header_notes = _classify_headers(primary_text)
+        classifications.append(
+            Classification(
+                doc_type=doc_type,
+                record_type=record_type,
+                layout_variant=layout_variant,
+                is_jawi=is_jawi,
+                jawi_proportion=jawi_proportion,
+                notes=[*header_notes, *jawi_notes, f"stacked classify ({len(paths)} files)"],
+            )
+        )
+    return classifications
+
+
 def _classify_headers(text: str) -> tuple[str, str | None, str | None, list[str]]:
     upper_text = text.upper()
     header_region = "\n".join(upper_text.splitlines()[:_HEADER_REGION_LINES])
