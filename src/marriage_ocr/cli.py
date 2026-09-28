@@ -617,6 +617,11 @@ def onedrive_fetch_public(
         "--only",
         help="Only fetch the file with this name (repeatable); default fetches everything",
     ),
+    skip_list: Path | None = typer.Option(
+        None,
+        "--skip-list",
+        help="Text file of paths relative to the share root (one per line) not to download -- e.g. files already processed",
+    ),
 ) -> None:
     """Download a link shared as "Anyone with the link" with a plain HTTP
     GET -- no Microsoft sign-in, no Entra ID app registration, no
@@ -633,7 +638,11 @@ def onedrive_fetch_public(
     if only:
         console.print(f"Only: {', '.join(only)}")
 
-    downloaded = download_anonymous_share(url, dest, only=only or None)
+    skip = skip_list.read_text(encoding="utf-8").splitlines() if skip_list is not None and skip_list.exists() else None
+    if skip:
+        console.print(f"Skipping {len(skip)} already-processed file(s)")
+
+    downloaded = download_anonymous_share(url, dest, only=only or None, skip=skip)
 
     console.print(f"[bold green]Downloaded {len(downloaded)} file(s) to {dest}[/bold green]")
 

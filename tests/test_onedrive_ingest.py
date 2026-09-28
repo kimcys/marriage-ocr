@@ -211,7 +211,7 @@ def test_download_anonymous_share_falls_back_to_browser_for_html_non_signin_resp
 
     fallback_calls: list[tuple[str, Path]] = []
 
-    def fake_browser_fallback(share_url, dest_dir, only=None):
+    def fake_browser_fallback(share_url, dest_dir, only=None, skip=None):
         fallback_calls.append((share_url, dest_dir))
         return [dest_dir / "recovered.pdf"]
 
@@ -664,3 +664,49 @@ def test_download_anonymous_share_zip_only_extracts_requested_files(monkeypatch,
 
     assert [p.relative_to(tmp_path).as_posix() for p in downloaded] == ["sub/page2.jpg"]
     assert not (tmp_path / "page1.jpg").exists()
+
+
+def test_download_all_rows_via_browser_skips_already_processed_paths_not_same_named_files(tmp_path: Path):
+    # Camera numbering repeats across folders: skipping SubA/image00001.jpg
+    # must not also skip SubB/image00001.jpg.
+    tree = _Node(
+        "root",
+        True,
+        [
+            _Node("SubA", True, [_Node("image00001.jpg", False), _Node("image00002.jpg", False)]),
+            _Node("SubB", True, [_Node("image00001.jpg", False)]),
+        ],
+    )
+    page = _FakeNestedFolderPage(tree)
+    skipped: list[str] = []
+
+    downloaded = onedrive_ingest._download_all_rows_via_browser(
+        page, tmp_path, skip={"suba/image00001.jpg"}, _skipped=skipped
+    )
+
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in downloaded) == [
+        "SubA/image00002.jpg",
+        "SubB/image00001.jpg",
+    ]
+    assert not (tmp_path / "SubA" / "image00001.jpg").exists()
+    assert skipped == ["image00001.jpg"]
+
+
+def test_download_anonymous_share_zip_skips_already_processed_paths(monkeypatch, tmp_path: Path):
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("A/page1.jpg", b"a1")
+        archive.writestr("B/page1.jpg", b"b1")
+    resolve_response = _FakeResponse("https://contoso-my.sharepoint.com/:f:/g/personal/x/AbCdEf?e=1")
+    download_response = _FakeResponse(
+        "https://contoso-my.sharepoint.com/:f:/g/personal/x/AbCdEf?e=1&download=1",
+        headers={"Content-Disposition": 'attachment; filename="folder.zip"', "Content-Type": "application/zip"},
+        content=buffer.getvalue(),
+    )
+    calls = iter([resolve_response, download_response])
+    monkeypatch.setattr(onedrive_ingest.requests, "get", lambda *a, **kw: next(calls))
+
+    downloaded = download_anonymous_share("https://1drv.ms/f/s!AbCdEf", tmp_path, skip=["A/page1.jpg"])
+
+    assert [p.relative_to(tmp_path).as_posix() for p in downloaded] == ["B/page1.jpg"]
+    assert not (tmp_path / "A" / "page1.jpg").exists()

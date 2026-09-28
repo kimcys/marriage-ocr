@@ -124,8 +124,19 @@ def _normalize_only(only: Iterable[str] | None) -> set[str] | None:
     return names or None
 
 
+def _normalize_skip(skip: Iterable[str] | None) -> set[str]:
+    """Case-insensitive set of paths *relative to the share root* (e.g.
+    "Nikah/Gombak/1994/image00001.jpg") not to download -- paths, not bare
+    names, because camera file names repeat across a share's sub-folders."""
+    return {Path(p.strip()).as_posix().lower() for p in skip or () if p.strip()}
+
+
 def download_anonymous_share(
-    share_url: str, dest_dir: str | Path, *, only: Iterable[str] | None = None
+    share_url: str,
+    dest_dir: str | Path,
+    *,
+    only: Iterable[str] | None = None,
+    skip: Iterable[str] | None = None,
 ) -> list[Path]:
     """Download a OneDrive/SharePoint share link with a plain, unauthenticated
     HTTP GET -- no Entra ID app registration, no sign-in, no client-id.
@@ -152,6 +163,7 @@ def download_anonymous_share(
     endpoint for it), but only the matching entries are extracted.
     """
     wanted = _normalize_only(only)
+    skipped_paths = _normalize_skip(skip)
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -181,7 +193,7 @@ def download_anonymous_share(
             "falling back to a headless-browser download.",
             share_url,
         )
-        return _download_via_browser(share_url, dest_dir, only=wanted)
+        return _download_via_browser(share_url, dest_dir, only=wanted, skip=skipped_paths)
 
     filename = _filename_from_response(response, fallback="download")
     content_type = response.headers.get("Content-Type", "")
@@ -204,6 +216,8 @@ def download_anonymous_share(
                 if info.is_dir():
                     continue
                 if wanted is not None and Path(info.filename).name.lower() not in wanted:
+                    continue
+                if Path(info.filename).as_posix().lower() in skipped_paths:
                     continue
                 target = dest_dir / info.filename
                 if target.exists() and target.stat().st_size == info.file_size:
@@ -325,7 +339,14 @@ def _next_unprocessed_row(page: Any, seen: set[str]) -> tuple[str, Any] | None:
 
 
 def _download_all_rows_via_browser(
-    page: Any, dest_dir: Path, *, _depth: int = 0, remaining: set[str] | None = None
+    page: Any,
+    dest_dir: Path,
+    *,
+    _depth: int = 0,
+    remaining: set[str] | None = None,
+    skip: set[str] | None = None,
+    _root: Path | None = None,
+    _skipped: list[str] | None = None,
 ) -> list[Path]:
     """Folder-listing shape: one row per file or sub-folder, each with its
     own "..." (Show more actions) menu. Downloads each file individually via
@@ -352,7 +373,14 @@ def _download_all_rows_via_browser(
     soon as the last wanted file has been found, instead of listing the
     rest of a possibly huge tree for nothing. Sub-folders still have to be
     entered, since a wanted file could be in any of them.
+
+    `skip` (lower-cased paths relative to the share root) are files the
+    caller already has -- marriage-be resuming an interrupted submission
+    passes the ones it already ingested. Their names are appended to
+    `_skipped` so the caller can tell "everything was skipped" apart from
+    "nothing recognizable on the page".
     """
+    root = _root if _root is not None else dest_dir
     if _depth > _MAX_BROWSER_FOLDER_DEPTH:
         LOGGER.warning(
             "Folder nesting under %s exceeds %d levels; not descending further.",
@@ -389,7 +417,13 @@ def _download_all_rows_via_browser(
                 page.wait_for_timeout(1000)  # let the new listing's rows settle
                 downloaded.extend(
                     _download_all_rows_via_browser(
-                        page, dest_dir / name, _depth=_depth + 1, remaining=remaining
+                        page,
+                        dest_dir / name,
+                        _depth=_depth + 1,
+                        remaining=remaining,
+                        skip=skip,
+                        _root=root,
+                        _skipped=_skipped,
                     )
                 )
                 if remaining is not None and not remaining:
@@ -407,6 +441,10 @@ def _download_all_rows_via_browser(
                 continue
 
             target = dest_dir / name
+            if skip and target.relative_to(root).as_posix().lower() in skip:
+                if _skipped is not None:
+                    _skipped.append(name)
+                continue
             if target.exists() and target.stat().st_size > 0:
                 # Resuming a previously-interrupted pull of this same folder
                 # (marriage-be reuses the same destination dir across a
@@ -475,7 +513,7 @@ def _download_single_item_via_browser(page: Any, dest_dir: Path) -> list[Path]:
 
 
 def _download_via_browser(
-    share_url: str, dest_dir: Path, *, only: set[str] | None = None
+    share_url: str, dest_dir: Path, *, only: set[str] | None = None, skip: set[str] | None = None
 ) -> list[Path]:
     """Render `share_url` in a real headless browser and pull its files out
     through OneDrive's own web UI, for the ambiguous "HTML but not a sign-in
@@ -514,11 +552,15 @@ def _download_via_browser(
                 raise RuntimeError(_SIGNIN_REQUIRED_MESSAGE)
 
             remaining = set(only) if only is not None else None
-            downloaded = _download_all_rows_via_browser(page, dest_dir, remaining=remaining)
-            if only is not None:
+            skipped: list[str] = []
+            downloaded = _download_all_rows_via_browser(
+                page, dest_dir, remaining=remaining, skip=skip, _skipped=skipped
+            )
+            if only is not None or (not downloaded and skipped):
                 # A filtered pull legitimately finding nothing (the file was
-                # removed from the share) isn't an unrecognized page -- the
-                # caller reports which names are missing.
+                # removed from the share -- the caller reports which names
+                # are missing), or a resume where every file was already
+                # done, isn't an unrecognized page.
                 return downloaded
             if not downloaded:
                 downloaded = _download_single_item_via_browser(page, dest_dir)
