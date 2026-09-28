@@ -167,6 +167,81 @@ def _classification_payload(classification: Any) -> dict[str, Any]:
     return result
 
 
+@app.command("gemini-batch-prepare")
+def gemini_batch_prepare(
+    input: Path = typer.Option(..., "--input", "-i", help="Handwritten input (image or PDF) to prepare"),
+    config: Path = typer.Option(..., "--config", help="gemini_page handwritten config"),
+    out_dir: Path = typer.Option(..., "--out-dir", help="Where to write manifest.json and page images"),
+) -> None:
+    """Gemini Batch Mode step 1 (see gemini_page_batch.py). Exit code 3 if the
+    config isn't a gemini_page config (run it with `process` instead)."""
+    from marriage_ocr import gemini_page_batch
+
+    try:
+        manifest = gemini_page_batch.prepare(input, config, out_dir)
+    except gemini_page_batch.BatchNotSupported as error:
+        print(json.dumps({"error": str(error)}), file=sys.stderr)
+        raise typer.Exit(code=3) from error
+    print(json.dumps({"pages": len(manifest["pages"]), "model": manifest["model"]}))
+
+
+@app.command("gemini-batch-submit")
+def gemini_batch_submit(
+    items: Path = typer.Option(..., "--items", help='JSON file: [{"key_prefix": ..., "prepared_dir": ...}, ...]'),
+    display_name: str = typer.Option("marriage-ocr", "--display-name"),
+) -> None:
+    """Gemini Batch Mode step 2: prints [{"name", "model", "keys"}] as JSON."""
+    from marriage_ocr import gemini_page_batch
+
+    raw = json.loads(items.read_text(encoding="utf-8"))
+    batches = gemini_page_batch.submit(
+        [gemini_page_batch.SubmitItem(str(i["key_prefix"]), Path(i["prepared_dir"])) for i in raw],
+        display_name=display_name,
+    )
+    print(json.dumps(batches))
+
+
+@app.command("gemini-batch-collect")
+def gemini_batch_collect(
+    batch: str = typer.Option(..., "--batch", help="Batch job name from gemini-batch-submit"),
+    out_dir: Path = typer.Option(..., "--out-dir", help="Where to write <key>.json / <key>.error"),
+) -> None:
+    """Gemini Batch Mode step 3: prints {"state", "done", "ok", "errors"} as JSON."""
+    from marriage_ocr import gemini_page_batch
+
+    print(json.dumps(gemini_page_batch.collect(batch, out_dir)))
+
+
+@app.command("gemini-batch-finish")
+def gemini_batch_finish(
+    input: Path = typer.Option(..., "--input", "-i"),
+    config: Path = typer.Option(..., "--config"),
+    prepared_dir: Path = typer.Option(..., "--prepared-dir"),
+    payload_dir: Path = typer.Option(..., "--payload-dir"),
+    key_prefix: str = typer.Option(..., "--key-prefix"),
+    output: Path = typer.Option(..., "--output", "-o"),
+    debug: Path = typer.Option(Path("debug"), "--debug"),
+) -> None:
+    """Gemini Batch Mode step 4: same output file `process` would write.
+    Exit code 3 if any page has no batch result (rerun with `process`)."""
+    from marriage_ocr import gemini_page_batch
+
+    try:
+        result = gemini_page_batch.finish(
+            input_path=input,
+            config_path=config,
+            prepared_dir=prepared_dir,
+            payload_dir=payload_dir,
+            key_prefix=key_prefix,
+            output_path=output,
+            debug_path=debug,
+        )
+    except gemini_page_batch.MissingBatchResult as error:
+        print(json.dumps({"error": str(error)}), file=sys.stderr)
+        raise typer.Exit(code=3) from error
+    print(json.dumps({"records": len(result.records)}))
+
+
 @app.command()
 def process(
     input: Path = typer.Option(..., "--input", "-i", help="Input image, PDF, or folder"),

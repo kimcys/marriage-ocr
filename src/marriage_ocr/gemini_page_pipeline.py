@@ -31,7 +31,7 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 from marriage_ocr.config import load_runtime_config
 from marriage_ocr.error_reporting import write_error_report
@@ -40,6 +40,7 @@ from marriage_ocr.models import ExtractedRecord
 from marriage_ocr.pipeline import ProcessResult, _emit_progress
 from marriage_ocr.validation import validate_gemini_only_record
 from llm import GeminiPageExtractor
+from llm.gemini_extractor import GeminiRecordResult
 
 
 def process_input_gemini_page(
@@ -52,11 +53,17 @@ def process_input_gemini_page(
     reset_output: bool = False,
     skip_existing: bool = False,
     progress_callback=None,
+    page_results_provider: Callable[[GeminiPageExtractor, int, Path], list[GeminiRecordResult]] | None = None,
 ) -> ProcessResult:
     """Same external contract as pipeline.process_input -- see its
     docstring for the parameter meanings. Called from there when
     `pipeline.engine: gemini_page` is set; not meant to be imported
     directly by callers that also need to handle the Vision-based path.
+
+    `page_results_provider(extractor, page_index, page_image_path)`
+    replaces the synchronous Gemini call per page -- used by
+    gemini_page_batch.py to finish a page from a Batch Mode result through
+    this exact same preprocessing/validation/export path.
     """
     from marriage_ocr.document_loader import load_document_pages, write_image
     from marriage_ocr.exporter import export_records_to_csv, export_records_to_xlsx
@@ -142,7 +149,10 @@ def process_input_gemini_page(
             page_image_path = page_debug_dir / "preprocessed_color.jpg"
             write_image(page_image_path, processed.color)
 
-            gemini_results = extractor.extract_page(page_image_path)
+            if page_results_provider is None:
+                gemini_results = extractor.extract_page(page_image_path)
+            else:
+                gemini_results = page_results_provider(extractor, index, page_image_path)
             total_gemini_calls += 1
 
             page_records_dir = page_debug_dir / "records"
