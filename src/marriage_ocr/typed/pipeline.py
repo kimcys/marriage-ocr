@@ -353,6 +353,75 @@ def _process_single_pdf(
     )
 
 
+RawFieldsProvider = Callable[[Path, str, str], "dict[str, RawField] | None"]
+
+
+def _result_from_raw_fields(
+    pdf: Path,
+    raw_fields: dict[str, RawField],
+    *,
+    debug_path: Path,
+    typed_cfg: Mapping[str, object],
+    validation_cfg: Mapping[str, object],
+    template_name: str,
+    record_type: str,
+    retain_debug_artifacts: bool,
+) -> TypedDocumentResult:
+    """Finish one PDF whose regions were read by another reader (Gemini, see
+    typed/gemini_reader.py) instead of Vision OCR: the same page-count check,
+    normalizers (build_extracted_record) and validation as _process_single_pdf,
+    minus the Vision-only retry crops."""
+    import pymupdf
+
+    source_file, source_stem = pdf.name, pdf.stem
+    document_debug_dir = debug_path / source_stem
+    document_debug_dir.mkdir(parents=True, exist_ok=True)
+    expected_pages = int(TEMPLATES[template_name]["pages"])
+    with pymupdf.open(pdf) as document:
+        page_count = document.page_count
+    if page_count != expected_pages:
+        return _record_failure(
+            source_file,
+            f"Expected exactly {expected_pages} page(s), found {page_count}: {source_file}",
+            debug_dir=document_debug_dir,
+        )
+    _write_json(document_debug_dir / "extracted_raw.json", {key: asdict(field) for key, field in raw_fields.items()})
+    record = build_extracted_record(raw_fields, template_name=template_name)
+    summary = validate_record(
+        record,
+        raw_fields,
+        word_confidence_threshold=float(typed_cfg.get("word_confidence_threshold", 0.75)),
+        min_age=int(validation_cfg.get("min_age", 16)),
+        max_age=int(validation_cfg.get("max_age", 120)),
+        max_retry_fields=0,
+        template_name=template_name,
+    )
+    from dataclasses import replace
+
+    from marriage_ocr.typed.gemini_reader import review_fields
+
+    must_review = tuple(key for key in review_fields(template_name) if key not in summary.failed_fields)
+    if must_review:
+        # Choice fields Gemini can't resolve (crossed-out options): always a
+        # human's call -- see gemini_reader.STRUCK_CHOICE_FIELDS.
+        summary = replace(summary, failed_fields=(*summary.failed_fields, *must_review))
+    _write_json(document_debug_dir / "validation.json", _serialise_summary(summary))
+    status = status_for_result(summary, retry_count=0)
+    record.record_type = record_type
+    record.source_file = source_file
+    record.source_page = 1
+    record.source_record = source_stem
+    record.crop_folder = str(document_debug_dir) if retain_debug_artifacts else None
+    _write_json(document_debug_dir / "extracted_normalised.json", asdict(record))
+    return TypedDocumentResult(
+        record=record,
+        source_file=source_file,
+        processing_status=status,
+        failed_fields=summary.failed_fields,
+        retry_count=0,
+    )
+
+
 def _process_micro_batch(
     *,
     pdfs: Sequence[Path],
@@ -365,7 +434,29 @@ def _process_micro_batch(
     record_type: str = "NIKAH",
     retain_debug_artifacts: bool = True,
     precomputed_page_ocr: Mapping[str, CachedPageOcr] | None = None,
+    raw_fields_provider: RawFieldsProvider | None = None,
 ) -> tuple[TypedDocumentResult, ...]:
+    # PDFs another reader (Gemini) handles skip Vision OCR entirely; any it
+    # can't read (returns None) fall through to the Vision path below.
+    read_elsewhere: dict[str, TypedDocumentResult] = {}
+    if raw_fields_provider is not None:
+        for pdf in pdfs:
+            raw_fields = raw_fields_provider(pdf, template_name, record_type)
+            if raw_fields is not None:
+                read_elsewhere[pdf.name] = _result_from_raw_fields(
+                    pdf,
+                    raw_fields,
+                    debug_path=debug_path,
+                    typed_cfg=typed_cfg,
+                    validation_cfg=validation_cfg,
+                    template_name=template_name,
+                    record_type=record_type,
+                    retain_debug_artifacts=retain_debug_artifacts,
+                )
+        if len(read_elsewhere) == len(pdfs):
+            return tuple(read_elsewhere[pdf.name] for pdf in pdfs)
+    all_pdfs = list(pdfs)
+    pdfs = [pdf for pdf in pdfs if pdf.name not in read_elsewhere]
     render_workers = max(1, int(typed_cfg.get("render_workers", 4)))
     expected_pages = int(TEMPLATES[template_name]["pages"])
     rendered: dict[str, tuple[RenderedPage, ...] | None] = {}
@@ -487,6 +578,9 @@ def _process_micro_batch(
             )
         except Exception as error:
             results.append(_record_failure(pdf.name, str(error), debug_dir=debug_path / pdf.stem))
+    if read_elsewhere:
+        by_name = {result.source_file: result for result in results} | read_elsewhere
+        return tuple(by_name[pdf.name] for pdf in all_pdfs)
     return tuple(results)
 
 
@@ -499,6 +593,7 @@ def _run_typed_micro_batches(
     progress_callback: ProgressCallback | None = None,
     retain_debug_artifacts: bool | None = None,
     precomputed_page_ocr: Mapping[str, CachedPageOcr] | None = None,
+    raw_fields_provider: RawFieldsProvider | None = None,
 ) -> list[TypedDocumentResult]:
     """Shared OCR+parse+validate core, config-sized micro-batch at a time.
 
@@ -561,6 +656,7 @@ def _run_typed_micro_batches(
                 record_type=record_type,
                 retain_debug_artifacts=retain_debug_artifacts,
                 precomputed_page_ocr=precomputed_page_ocr,
+                raw_fields_provider=raw_fields_provider,
             )
             on_results(list(batch_results))
             completed.extend(batch_results)
@@ -611,6 +707,7 @@ def process_typed_input(
     progress_callback: ProgressCallback | None = None,
     retain_debug_artifacts: bool | None = None,
     page1_ocr_path: Path | None = None,
+    raw_fields_provider: RawFieldsProvider | None = None,
 ) -> TypedBatchResult:
     """`page1_ocr_path` (single-file input only): classify's saved page-1
     Vision result for that file, reused instead of a second Vision call."""
@@ -645,6 +742,7 @@ def process_typed_input(
         progress_callback=progress_callback,
         retain_debug_artifacts=retain_debug_artifacts,
         precomputed_page_ocr=precomputed_page_ocr,
+        raw_fields_provider=raw_fields_provider,
     )
 
     ordered = tuple(sorted(completed, key=lambda result: result.source_file.casefold()))

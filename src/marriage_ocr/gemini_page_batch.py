@@ -40,18 +40,63 @@ class BatchNotSupported(ValueError):
     """The config isn't a gemini_page config -- run it synchronously."""
 
 
-def _require_gemini_page(config_path: Path) -> None:
+def _config_kind(config_path: Path) -> str:
+    """'gemini_page' (handwritten) or 'typed'; anything else can't be batched."""
     cfg = load_runtime_config(config_path).data
     engine = str(cfg.get("pipeline", {}).get("engine", "")).strip().lower()
-    if engine != "gemini_page":
-        raise BatchNotSupported(f"{config_path} is not a gemini_page config (engine={engine!r})")
+    if engine == "gemini_page":
+        return "gemini_page"
+    if cfg.get("typed", {}).get("template"):
+        return "typed"
+    raise BatchNotSupported(f"{config_path} is neither a gemini_page nor a typed config (engine={engine!r})")
+
+
+def _require_gemini_page(config_path: Path) -> None:
+    if _config_kind(config_path) != "gemini_page":
+        raise BatchNotSupported(f"{config_path} is not a gemini_page config")
+
+
+def _typed_settings(config_path: Path) -> tuple[str, str]:
+    cfg = load_runtime_config(config_path).data
+    return str(cfg["typed"]["template"]), str(cfg.get("record_type", "NIKAH")).upper()
+
+
+def _prepare_typed(input_path: Path, config_path: Path, out_dir: Path) -> dict[str, Any]:
+    """A typed certificate is ONE request holding all its pages (see
+    typed/gemini_reader.py) -- the same request the live --reader gemini
+    call sends."""
+    from marriage_ocr.typed.gemini_reader import DEFAULT_MODEL, build_request, render_pages
+
+    template, record_type = _typed_settings(config_path)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    images = render_pages(input_path)
+    request = build_request(template, record_type, len(images))
+    pages = []
+    for index, image in enumerate(images, start=1):
+        name = f"page_{index}.jpg"
+        (out_dir / name).write_bytes(image)
+        pages.append({"index": index, "image": name})
+    manifest = {
+        "version": MANIFEST_VERSION,
+        "kind": "typed",
+        "model": DEFAULT_MODEL,
+        "mime_type": "image/jpeg",
+        "request": {
+            "contents": [{"role": "user", "parts": [{"text": request["prompt"]}]}],
+            "generation_config": request["generation_config"],
+        },
+        "pages": pages,
+    }
+    (out_dir / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    return manifest
 
 
 def prepare(input_path: Path, config_path: Path, out_dir: Path) -> dict[str, Any]:
     """Write out_dir/manifest.json plus one preprocessed page image per page."""
     from marriage_ocr.gemini_page_pipeline import process_input_gemini_page
 
-    _require_gemini_page(config_path)
+    if _config_kind(config_path) == "typed":
+        return _prepare_typed(input_path, config_path, out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, Any] = {"version": MANIFEST_VERSION, "pages": []}
 
@@ -126,16 +171,25 @@ def submit(items: Sequence[SubmitItem], *, display_name: str, client: Any = None
             jsonl_path = Path(tmp) / "requests.jsonl"
             with jsonl_path.open("w", encoding="utf-8") as jsonl:
                 for item, manifest in entries:
-                    for page in manifest["pages"]:
-                        uploaded = client.files.upload(
+                    uploads = [
+                        client.files.upload(
                             file=str(item.prepared_dir / page["image"]),
                             config=types.UploadFileConfig(mime_type=manifest["mime_type"]),
                         )
+                        for page in manifest["pages"]
+                    ]
+                    if manifest.get("kind") == "typed":
+                        # One request per certificate, every page attached.
+                        groups = [(manifest["pages"][0]["index"], uploads)]
+                    else:
+                        # One request per handwritten page.
+                        groups = [(page["index"], [upload]) for page, upload in zip(manifest["pages"], uploads)]
+                    for index, files in groups:
                         request = json.loads(json.dumps(manifest["request"]))
-                        request["contents"][0]["parts"].append(
-                            {"file_data": {"file_uri": uploaded.uri, "mime_type": manifest["mime_type"]}}
+                        request["contents"][0]["parts"].extend(
+                            {"file_data": {"file_uri": f.uri, "mime_type": manifest["mime_type"]}} for f in files
                         )
-                        line = {"key": page_key(item.key_prefix, page["index"]), "request": request}
+                        line = {"key": page_key(item.key_prefix, index), "request": request}
                         jsonl.write(json.dumps(line, ensure_ascii=False) + "\n")
             uploaded_jsonl = client.files.upload(
                 file=str(jsonl_path), config=types.UploadFileConfig(display_name=display_name, mime_type="jsonl")
@@ -210,8 +264,17 @@ def finish(
     MissingBatchResult (before writing anything) if any page lacks one."""
     from marriage_ocr.gemini_page_pipeline import process_input_gemini_page
 
-    _require_gemini_page(config_path)
     manifest = json.loads((prepared_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
+    if _config_kind(config_path) == "typed":
+        return _finish_typed(
+            input_path=input_path,
+            config_path=config_path,
+            manifest=manifest,
+            payload_dir=payload_dir,
+            key_prefix=key_prefix,
+            output_path=output_path,
+            debug_path=debug_path,
+        )
     missing = [
         page["index"]
         for page in manifest["pages"]
@@ -238,3 +301,32 @@ def finish(
         # partial result.
         raise RuntimeError(f"page(s) failed while finishing from batch results: {result.failed_pages}")
     return result
+
+
+def _finish_typed(
+    *,
+    input_path: Path,
+    config_path: Path,
+    manifest: dict[str, Any],
+    payload_dir: Path,
+    key_prefix: str,
+    output_path: Path,
+    debug_path: Path,
+):
+    """process-typed's own CSV output for one certificate, with its regions
+    taken from the batch result instead of any live read."""
+    from marriage_ocr.typed.gemini_reader import raw_fields_from_payload
+    from marriage_ocr.typed.pipeline import process_typed_input
+
+    payload_path = payload_dir / f"{page_key(key_prefix, manifest['pages'][0]['index'])}.json"
+    if not payload_path.is_file():
+        raise MissingBatchResult(f"no batch result for {input_path}")
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    return process_typed_input(
+        input_path=input_path,
+        output_path=output_path,
+        debug_path=debug_path,
+        config_path=config_path,
+        reset_output=True,
+        raw_fields_provider=lambda pdf, template, record_type: raw_fields_from_payload(payload, template),
+    )

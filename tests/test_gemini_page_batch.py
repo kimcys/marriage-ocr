@@ -236,3 +236,65 @@ def test_collect_does_nothing_while_the_batch_is_still_running(tmp_path: Path) -
     summary = gemini_page_batch.collect("batches/abc", tmp_path / "out", client=FakeClient(state="JOB_STATE_RUNNING"))
     assert summary == {"state": "JOB_STATE_RUNNING", "done": False, "ok": [], "errors": {}}
     assert not (tmp_path / "out").exists()
+
+
+def test_typed_certificate_is_one_batch_request_with_every_page(tmp_path: Path) -> None:
+    import pymupdf
+
+    config = tmp_path / "typed.yaml"
+    config.write_text("record_type: CERAI\ntyped:\n  template: cerai_modern\n", encoding="utf-8")
+    pdf = tmp_path / "cert.pdf"
+    document = pymupdf.open()
+    document.new_page(width=595, height=842)
+    document.new_page(width=595, height=842)
+    document.save(pdf)
+    document.close()
+
+    prepared = tmp_path / "prepared"
+    manifest = gemini_page_batch.prepare(pdf, config, prepared)
+    assert manifest["kind"] == "typed" and len(manifest["pages"]) == 2
+    assert "CROSSED OUT" in manifest["request"]["contents"][0]["parts"][0]["text"]
+
+    client = FakeClient()
+    gemini_page_batch.submit([gemini_page_batch.SubmitItem("job-9", prepared)], display_name="t", client=client)
+    jsonl_path = Path(client.uploaded[-1][0])
+    assert len(client.uploaded) == 3  # two page images + the JSONL
+
+
+def test_typed_finish_writes_process_typed_csv_from_the_batch_payload(tmp_path: Path, monkeypatch) -> None:
+    import pymupdf
+
+    config = tmp_path / "typed.yaml"
+    config.write_text(
+        "record_type: NIKAH\ntyped:\n  template: nikah_legacy\n  validation:\n    min_age: 16\n    max_age: 120\n",
+        encoding="utf-8",
+    )
+    pdf = tmp_path / "cert.pdf"
+    document = pymupdf.open()
+    document.new_page(width=595, height=842)
+    document.new_page(width=595, height=842)
+    document.save(pdf)
+    document.close()
+    prepared = tmp_path / "prepared"
+    gemini_page_batch.prepare(pdf, config, prepared)
+    payloads = tmp_path / "payloads"
+    payloads.mkdir()
+    monkeypatch.setattr(
+        "marriage_ocr.typed.pipeline._ocr_micro_batch",
+        lambda *a: (_ for _ in ()).throw(AssertionError("no Vision call when finishing from a batch")),
+    )
+
+    with pytest.raises(gemini_page_batch.MissingBatchResult):
+        gemini_page_batch.finish(
+            input_path=pdf, config_path=config, prepared_dir=prepared, payload_dir=payloads,
+            key_prefix="job-9", output_path=tmp_path / "out.csv", debug_path=tmp_path / "debug",
+        )  # fmt: skip
+
+    (payloads / "job-9__1.json").write_text(json.dumps({"nama_suami": "AZEMI BIN ABDULLAH"}))
+    result = gemini_page_batch.finish(
+        input_path=pdf, config_path=config, prepared_dir=prepared, payload_dir=payloads,
+        key_prefix="job-9", output_path=tmp_path / "out.csv", debug_path=tmp_path / "debug",
+    )  # fmt: skip
+
+    assert result.records[0].record.nama_suami == "AZEMI BIN ABDULLAH"
+    assert "AZEMI BIN ABDULLAH" in (tmp_path / "out.csv").read_text()

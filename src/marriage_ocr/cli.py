@@ -441,6 +441,17 @@ def web(
     subprocess.run(command, check=True, env=os.environ.copy())
 
 
+def _typed_reader_provider(reader: str):
+    reader = reader.strip().lower()
+    if reader == "vision":
+        return None
+    if reader == "gemini":
+        from marriage_ocr.typed.gemini_reader import GeminiTypedReader
+
+        return GeminiTypedReader().read
+    raise typer.BadParameter(f"--reader must be 'vision' or 'gemini', not {reader!r}")
+
+
 @app.command("process-typed")
 def process_typed(
     input_path: Path = typer.Option(..., "--input", help="Input PDF folder or file"),
@@ -465,6 +476,11 @@ def process_typed(
     ),
     reset_output: bool = typer.Option(False, "--reset-output", help="Delete old typed CSV before processing"),
     skip_existing: bool = typer.Option(False, "--skip-existing", help="Skip typed rows already processed successfully"),
+    reader: str = typer.Option(
+        "vision",
+        "--reader",
+        help="'vision' (template regions via Google Vision) or 'gemini' (Gemini reads the same regions; falls back to vision per PDF on any error)",
+    ),
     page1_ocr: Path | None = typer.Option(
         None,
         "--page1-ocr",
@@ -512,6 +528,7 @@ def process_typed(
             skip_existing=skip_existing,
             retain_debug_artifacts=retain_debug_artifacts,
             page1_ocr_path=page1_ocr,
+            raw_fields_provider=_typed_reader_provider(reader),
         )
         console.print(
             f"Typed OCR complete: discovered={result.discovered_pdfs} written={result.written_rows} skipped={len(result.skipped_files)}"
