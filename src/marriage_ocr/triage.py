@@ -44,12 +44,15 @@ _JAWI_UNICODE_RANGES: tuple[tuple[int, int], ...] = (
 )
 
 # Fraction of recognized alphabetic characters that must be Jawi/Arabic-range
-# for a page to count as "entirely Jawi" and get skipped. NOT calibrated
-# against a real Jawi sample -- none exists in this repo yet. A page with
-# only an incidental Jawi label/translation should read far below this; a
-# genuinely Jawi-written page should read far above it. Revisit once real
-# Jawi samples are available, same as the layout-ratio configs were tuned.
-DEFAULT_JAWI_PROPORTION_THRESHOLD = 0.85
+# for a page to count as Jawi and get skipped. Calibrated against real
+# samples: 49 genuine Jawi register pages scored 0.61-0.90 (median 0.77),
+# both classified one at a time and in stacks -- they are never "entirely"
+# Jawi, since printed English/Rumi titles ("DIVORCE REGISTER"), Rumi notes and
+# digits are mixed in -- while every real Rumi handwritten page scored 0.00
+# (including when the ar-hinted pass was the one used). The old 0.85 guess
+# missed 44 of those 49 Jawi pages, and one ("Sijil Rujuk" in a Rumi note)
+# was routed to Gemini as a Rujuk register. 0.40 sits well clear of both.
+DEFAULT_JAWI_PROPORTION_THRESHOLD = 0.40
 
 # Small edit-distance tolerance for a handwritten keyword match -- 1 for a
 # keyword of 6 letters or fewer, 2 for anything longer. Confirmed necessary

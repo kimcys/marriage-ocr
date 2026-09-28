@@ -420,3 +420,18 @@ def test_stacked_classify_rejects_pdfs_and_oversized_stacks(tmp_path, monkeypatc
 
     with pytest.raises(ValueError, match="1-3"):
         triage.classify_files_stacked([image] * 4, allowed_extensions=[".jpg"])
+
+
+def test_jawi_threshold_catches_real_jawi_pages_and_never_a_rumi_one():
+    """Proportions measured on real samples (see DEFAULT_JAWI_PROPORTION_THRESHOLD):
+    Jawi register pages 0.61-0.90, Rumi pages 0.00."""
+    def page(jawi_chars, latin_chars):
+        return OcrResult(text="ج" * jawi_chars + "a" * latin_chars)
+
+    threshold = triage.DEFAULT_JAWI_PROPORTION_THRESHOLD
+    for proportion in (0.61, 0.77, 0.90):
+        jawi = int(proportion * 1000)
+        is_jawi, measured, _ = triage._assess_jawi(page(0, 10), page(jawi, 1000 - jawi), threshold)
+        assert is_jawi, proportion
+    is_jawi, measured, _ = triage._assess_jawi(page(0, 800), page(0, 700), threshold)
+    assert not is_jawi and measured == 0.0
