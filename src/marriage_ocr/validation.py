@@ -97,15 +97,14 @@ def validate_gemini_only_record(
     scorer = _SCORERS.get(str(record_type or "nikah").strip().lower(), _score_nikah)
     reasons, missing_fields, critical, confidence = scorer(validated, validation_config)
 
+    # The page pipeline no longer asks Gemini for field_confidence (see
+    # gemini_page_extractor.py) -- its absence is expected, not a penalty.
     if field_confidence:
         min_average_confidence = float(validation_config.get("min_average_confidence", 0.50))
         average_field_confidence = mean(field_confidence.values())
         if average_field_confidence < min_average_confidence:
             confidence -= 0.10
             reasons.append("low Gemini field confidence")
-    else:
-        confidence -= 0.10
-        reasons.append("no Gemini field confidence reported")
 
     if uncertain_fields:
         confidence -= 0.05 * len(list(uncertain_fields))

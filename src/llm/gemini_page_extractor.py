@@ -19,7 +19,9 @@ range, date validity), not just trusting Gemini's own reported confidence
 """
 from __future__ import annotations
 
+import copy
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,22 @@ def _rules_only(instructions: str) -> str:
     return instructions[index:] if index != -1 else instructions
 
 
+# Per-field confidence is dropped from the page pipeline's prompt and schema:
+# it measured ~24% of output tokens (the dominant Gemini cost) yet reads
+# 0.966-0.979 regardless of accuracy, so validate_gemini_only_record never
+# acted on it. Measured on 9 real pages: same 34/34 records, field agreement
+# within the model's own run-to-run variation. uncertain_fields stays.
+_CONFIDENCE_SENTENCE = re.compile(
+    r"- Return field_confidence as an array of objects with `field` and\s+`confidence`\. "
+    r"Put fields below 0\.70 confidence into uncertain_fields\."
+)
+
+
+def _without_field_confidence(prompt: str) -> str:
+    prompt = _CONFIDENCE_SENTENCE.sub("- Put any field you could not read confidently into uncertain_fields.", prompt)
+    return "\n".join(line for line in prompt.splitlines() if "field_confidence" not in line)
+
+
 # A page can hold several records with many fields each; the single-record
 # max_output_tokens (tuned for one row) truncates a multi-record response
 # well before every row's JSON fits -- confirmed empirically against a
@@ -68,10 +86,17 @@ class GeminiPageExtractor(GeminiRecordExtractor):
     shape are new.
     """
 
+    def _page_record_schema(self) -> dict[str, Any]:
+        schema = copy.deepcopy(self._response_schema())
+        schema.get("properties", {}).pop("field_confidence", None)
+        if "required" in schema:
+            schema["required"] = [name for name in schema["required"] if name != "field_confidence"]
+        return schema
+
     def _page_schema(self) -> dict[str, Any]:
         return {
             "type": "OBJECT",
-            "properties": {"records": {"type": "ARRAY", "items": self._response_schema()}},
+            "properties": {"records": {"type": "ARRAY", "items": self._page_record_schema()}},
             "required": ["records"],
         }
 
@@ -83,6 +108,7 @@ class GeminiPageExtractor(GeminiRecordExtractor):
             rules = "\n\n".join([_rules_only(record_schemas._SHARED_RULES), _PAGE_FIELD_NOTES[self.record_type]])
 
         layout_note = record_schemas._layout_note(self.layout_variant)
+        rules = _without_field_confidence(rules)
 
         return f"""
 You are extracting ALL handwritten rows (records) visible on this ONE PAGE of

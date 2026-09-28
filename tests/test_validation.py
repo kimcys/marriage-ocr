@@ -465,7 +465,7 @@ def test_validate_gemini_only_record_flags_missing_husband_name_as_critical() ->
     assert "missing husband name" in validated.review_reason
 
 
-def test_validate_gemini_only_record_penalizes_missing_confidence_signal() -> None:
+def test_validate_gemini_only_record_treats_missing_confidence_like_todays_flat_high_confidence() -> None:
     record = ExtractedRecord(
         bil="12",
         nama_suami="MOHAMAD BIN YASMIN",
@@ -483,16 +483,31 @@ def test_validate_gemini_only_record_penalizes_missing_confidence_signal() -> No
         tarikh_nikah="1994-08-27",
     )
 
-    validated = validate_gemini_only_record(
-        record,
+    from dataclasses import replace
+
+    without = validate_gemini_only_record(
+        replace(record),
         field_confidence={},
         uncertain_fields=[],
         validation_config=VALIDATION_CONFIG,
         record_type="nikah",
     )
+    # What Gemini reported before the page pipeline stopped requesting it:
+    # flat ~0.97 on every field.
+    flat_high = validate_gemini_only_record(
+        replace(record),
+        field_confidence={"nama_suami": 0.97, "nama_isteri": 0.97, "bil": 0.97},
+        uncertain_fields=[],
+        validation_config=VALIDATION_CONFIG,
+        record_type="nikah",
+    )
 
-    assert "no Gemini field confidence reported" in validated.review_reason
-    assert validated.status_review == "REVIEW"
+    assert "no Gemini field confidence reported" not in without.review_reason
+    assert (without.status_review, without.confidence, without.review_reason) == (
+        flat_high.status_review,
+        flat_high.confidence,
+        flat_high.review_reason,
+    )
 
 
 def test_validate_gemini_only_record_penalizes_uncertain_fields() -> None:

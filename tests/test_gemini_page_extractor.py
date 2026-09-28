@@ -54,7 +54,20 @@ def test_page_schema_wraps_per_record_schema_in_records_array() -> None:
     assert schema["type"] == "OBJECT"
     assert schema["required"] == ["records"]
     assert schema["properties"]["records"]["type"] == "ARRAY"
-    assert schema["properties"]["records"]["items"] == extractor._response_schema()
+    items = schema["properties"]["records"]["items"]
+    assert "field_confidence" not in items["properties"]
+    assert "uncertain_fields" in items["properties"]
+    assert "field_confidence" not in items.get("required", [])
+    # Everything else is the per-record schema, unchanged.
+    full = extractor._response_schema()
+    assert {k: v for k, v in full["properties"].items() if k != "field_confidence"} == items["properties"]
+
+
+def test_page_prompt_never_asks_for_field_confidence() -> None:
+    for record_type in ("nikah", "cerai", "rujuk"):
+        prompt = _make_extractor(record_type=record_type)._page_prompt()
+        assert "field_confidence" not in prompt
+        assert "uncertain_fields" in prompt
 
 
 def test_page_prompt_for_nikah_reuses_single_record_rules_with_page_framing() -> None:
