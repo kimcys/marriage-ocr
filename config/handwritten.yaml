@@ -101,7 +101,10 @@ llm:
   skip_gemini_min_confidence: 0.90
 
 debug:
-  retain_artifacts: true
+  # false in production: a retained debug tree (original + preprocessed page,
+  # plus a full-page copy per record) was ~6 copies of every page, never read
+  # by marriage-be, and filled worker-1's disk. Set true locally to inspect.
+  retain_artifacts: false
 
 validation:
   ok_confidence_threshold: 0.85
