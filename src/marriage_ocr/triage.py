@@ -261,6 +261,7 @@ MAX_STACK_SIZE = 3
 MAX_STACK_JPEG_BYTES = 20 * 1024 * 1024
 _STACK_GAP_PX = 80
 _STACK_JPEG_QUALITY = 95
+_PDF_STACK_TOP_FRACTION = 0.40
 
 
 class StackTooLargeError(ValueError):
@@ -278,28 +279,32 @@ def classify_files_stacked(
     stacking them into one tall image and judging each page only from the
     words inside its own band -- same header keywords, same Jawi rule.
     Validated against per-file classify_file on real handwritten samples
-    (27/27 identical, stacks of 2 and 3, mixed legacy/modern). Classify only
+    (27/27 identical, stacks of 2 and 3, mixed legacy/modern). PDFs contribute
+    their first page; a stack of only typed forms skips the ar pass. Classify only
     reads large printed titles/column headers, which survive the taller
     image; don't reuse this for field extraction (a stacked typed-form test
     changed ~6% of extracted fields)."""
     import cv2
     import numpy as np
 
-    from marriage_ocr.typed.extractor import join_words_in_reading_order
-    from marriage_ocr.typed.vision import TypedVisionClient
-
     paths = [Path(p) for p in file_paths]
     if not 1 <= len(paths) <= MAX_STACK_SIZE:
         raise ValueError(f"a stack holds 1-{MAX_STACK_SIZE} files, got {len(paths)}")
-    if any(path.suffix.lower() == ".pdf" for path in paths):
-        raise ValueError("stacked classify is for single-image files; classify PDFs with classify_file")
 
     images = []
     for path in paths:
-        pages = load_document_pages(path, list(allowed_extensions))
+        # A PDF contributes only the top of its first page: a typed form's
+        # title and enactment line ("No. 4 TAHUN 1984" = legacy) are all
+        # classify reads, and in a full 3-page-tall stack that small print
+        # was lost -- every legacy form read as modern (46/82 correct). Top
+        # of page only keeps it sharp. Images (handwritten) stay whole.
+        pages = load_document_pages(path, list(allowed_extensions), pdf_dpi=300)
         if not pages:
             raise ValueError(f"no page found in {path.name}")
-        images.append(pages[0].image)
+        image = pages[0].image
+        if path.suffix.lower() == ".pdf":
+            image = image[: max(1, int(image.shape[0] * _PDF_STACK_TOP_FRACTION))]
+        images.append(image)
 
     width = max(image.shape[1] for image in images)
     rows: list[np.ndarray] = []
@@ -324,19 +329,56 @@ def classify_files_stacked(
             )
 
         def band_texts(language_hints: tuple[str, ...]) -> list[str]:
-            result = TypedVisionClient(language_hints=language_hints).annotate_image_paths(
-                [(paths[0].name, 1, stack_path)]
-            )[0]
-            if result.error_message:
-                raise RuntimeError(f"Google Vision OCR failed for stacked classify: {result.error_message}")
+            from marriage_ocr.typed.extractor import join_words_in_reading_order
+            from marriage_ocr.typed.vision import annotation_to_page_result
+
+            _, annotation = GoogleVisionOcrEngine({"language_hints": list(language_hints)}).read_image_annotated(
+                stack_path
+            )
+
+            def band_of(top_px: float, bottom_px: float) -> int | None:
+                centre = (top_px + bottom_px) / 2
+                return next((i for i, (top, bottom) in enumerate(spans) if top <= centre < bottom), None)
+
+            # PDFs (typed forms): whole Vision text blocks in Vision's own
+            # order, as classify_file's text is -- keeps a certificate title
+            # on its own line, apart from a stamp printed beside it.
+            blocks: list[list[str]] = [[] for _ in spans]
+            for page in getattr(annotation, "pages", []) or []:
+                for block in getattr(page, "blocks", []) or []:
+                    ys = [float(getattr(v, "y", 0) or 0) for v in getattr(block.bounding_box, "vertices", []) or []]
+                    band = band_of(min(ys), max(ys)) if ys else None
+                    if band is None:
+                        continue
+                    for paragraph in getattr(block, "paragraphs", []) or []:
+                        words = [
+                            "".join(str(getattr(sym, "text", "")) for sym in getattr(word, "symbols", []) or [])
+                            for word in getattr(paragraph, "words", []) or []
+                        ]
+                        line = " ".join(w for w in words if w)
+                        if line:
+                            blocks[band].append(line)
+
+            # Images (handwritten registers): words in reading order -- the
+            # form validated 27/27 against classify_file on real ledgers.
+            words = annotation_to_page_result(annotation, source_file=paths[0].name, page_number=1).words
             texts = []
-            for top, bottom in spans:
-                inside = tuple(word for word in result.words if top <= ((word.y1 + word.y2) / 2) * height < bottom)
-                texts.append(join_words_in_reading_order(inside))
+            for index, (path, (top, bottom)) in enumerate(zip(paths, spans)):
+                if path.suffix.lower() == ".pdf":
+                    texts.append("\n".join(blocks[index]))
+                else:
+                    inside = tuple(w for w in words if top <= ((w.y1 + w.y2) / 2) * height < bottom)
+                    texts.append(join_words_in_reading_order(inside))
             return texts
 
         primary_texts = band_texts(("ms", "en"))
-        jawi_texts = band_texts(("ar",))
+        # Same rule as classify_file: a matched typed-form title means a
+        # printed Rumi form, never Jawi -- so a stack of nothing but typed
+        # forms skips the (billed) ar-hinted pass: 1 Vision call for 3 PDFs.
+        if all(_classify_headers(text)[0] == "typed" for text in primary_texts):
+            jawi_texts = [""] * len(primary_texts)
+        else:
+            jawi_texts = band_texts(("ar",))
 
     classifications = []
     for primary_text, jawi_text in zip(primary_texts, jawi_texts, strict=True):
@@ -357,6 +399,11 @@ def classify_files_stacked(
     return classifications
 
 
+def _is_standalone_title(line: str, keyword: str) -> bool:
+    stripped = line.strip(" .:'\u2019*")
+    return stripped.startswith(keyword) and len(stripped) <= len(keyword) + 4
+
+
 def _classify_headers(text: str) -> tuple[str, str | None, str | None, list[str]]:
     upper_text = text.upper()
     header_region = "\n".join(upper_text.splitlines()[:_HEADER_REGION_LINES])
@@ -367,14 +414,22 @@ def _classify_headers(text: str) -> tuple[str, str | None, str | None, list[str]
     # handwritten first would let a typed certificate's body text (which
     # can legitimately mention "...kahwin, cerai dan rujuk...") false-match
     # on the bare word "RUJUK" before ever reaching the more specific check.
-    for keyword, record_type in _TYPED_HEADER_KEYWORDS.items():
-        if keyword in upper_text:
-            layout_variant = None
-            if record_type in ("cerai", "rujuk", "nikah"):
-                layout_variant = (
-                    "legacy" if _TYPED_LEGACY_ENACTMENT_KEYWORD in upper_text else "modern"
-                )
-            return "typed", record_type, layout_variant, []
+    matched = [(keyword, record_type) for keyword, record_type in _TYPED_HEADER_KEYWORDS.items() if keyword in upper_text]
+    if matched:
+        # More than one certificate title can appear on a page: a Cerai form
+        # has a "Bilangan Daftar Surat Perakuan Rujuk" field label, and a real
+        # Rujuk form carried a registrar's stamp reading "No. Siri Surat
+        # Perakuan Cerai / Ruju'". The actual title stands on its own line;
+        # those mentions sit inside longer lines. Prefer a standalone match,
+        # else keep the original order (Cerai, then Rujuk, then Nikah).
+        standalone = [
+            (keyword, record_type)
+            for keyword, record_type in matched
+            if any(_is_standalone_title(line, keyword) for line in upper_text.splitlines())
+        ]
+        keyword, record_type = (standalone or matched)[0]
+        layout_variant = "legacy" if _TYPED_LEGACY_ENACTMENT_KEYWORD in upper_text else "modern"
+        return "typed", record_type, layout_variant, []
 
     for keyword, record_type in _HANDWRITTEN_HEADER_KEYWORDS.items():
         if _fuzzy_keyword_in_region(keyword, header_region):

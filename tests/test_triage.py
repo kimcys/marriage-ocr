@@ -351,30 +351,36 @@ def _write_jpg(path, height):
     cv2.imwrite(str(path), np.full((height, 400, 3), 255, dtype=np.uint8))
 
 
-class _FakeStackClient:
-    """Stands in for TypedVisionClient: returns one word per band (by the
-    stacked image's normalized y), text chosen per band index."""
+class _FakeStackEngine:
+    """Stands in for GoogleVisionOcrEngine on a stacked image: one Vision text
+    block per entry of band_blocks[hints], at the given pixel y-range."""
 
     calls: list = []
-    band_words: dict = {}
+    band_blocks: dict = {}
 
-    def __init__(self, language_hints):
-        self._hints = tuple(language_hints)
+    def __init__(self, config):
+        self._hints = tuple(config["language_hints"])
 
-    def annotate_image_paths(self, items):
-        from marriage_ocr.typed.models import PageOcrResult, PositionedWord
+    def read_image_annotated(self, image_path):
+        from types import SimpleNamespace as NS
 
-        _FakeStackClient.calls.append(self._hints)
-        words = tuple(
-            PositionedWord(text, 0.9, 0.1, y1, 0.5, y2, 1)
-            for (y1, y2), text in _FakeStackClient.band_words[self._hints]
-        )
-        return (PageOcrResult(items[0][0], 1, words, "", {}),)
+        import cv2
+
+        _FakeStackEngine.calls.append(self._hints)
+        height, width = cv2.imread(str(image_path)).shape[:2]
+        blocks = []
+        for (top, bottom), text in _FakeStackEngine.band_blocks.get(self._hints, []):
+            words = []
+            for i, w in enumerate(text.split()):
+                x = 10 + i * 30
+                box = NS(vertices=[NS(x=x, y=top), NS(x=x + 25, y=top), NS(x=x + 25, y=bottom), NS(x=x, y=bottom)])
+                words.append(NS(symbols=[NS(text=w)], confidence=0.9, bounding_box=box))
+            vertices = [NS(x=0, y=top), NS(x=10, y=top), NS(x=10, y=bottom), NS(x=0, y=bottom)]
+            blocks.append(NS(bounding_box=NS(vertices=vertices), paragraphs=[NS(words=words)]))
+        return OcrResult(text=""), NS(pages=[NS(width=width, height=height, blocks=blocks)], text="")
 
 
 def test_stacked_classify_judges_each_page_from_its_own_band(tmp_path, monkeypatch):
-    import marriage_ocr.typed.vision as vision
-
     heights = [100, 100, 100]
     files = []
     for index, height in enumerate(heights):
@@ -382,16 +388,16 @@ def test_stacked_classify_judges_each_page_from_its_own_band(tmp_path, monkeypat
         _write_jpg(path, height)
         files.append(path)
     # Stacked height = 3*100 + 2*80 gap = 460; band centres at y ~ 50, 230, 410.
-    _FakeStackClient.calls = []
-    _FakeStackClient.band_words = {
+    _FakeStackEngine.calls = []
+    _FakeStackEngine.band_blocks = {
         ("ms", "en"): [
-            ((40 / 460, 60 / 460), "DAFTAR PERKAHWINAN ORANG ISLAM"),
-            ((220 / 460, 240 / 460), "DAFTAR PERCERAIAN ORANG ISLAM CATATAN"),
-            ((400 / 460, 420 / 460), "DAFTAR RUJUK ORANG ISLAM"),
+            ((40, 60), "DAFTAR PERKAHWINAN ORANG ISLAM"),
+            ((220, 240), "DAFTAR PERCERAIAN ORANG ISLAM CATATAN"),
+            ((400, 420), "DAFTAR RUJUK ORANG ISLAM"),
         ],
         ("ar",): [],
     }
-    monkeypatch.setattr(vision, "TypedVisionClient", _FakeStackClient)
+    monkeypatch.setattr(triage, "GoogleVisionOcrEngine", _FakeStackEngine)
 
     results = triage.classify_files_stacked(files, allowed_extensions=[".jpg"])
 
@@ -401,16 +407,11 @@ def test_stacked_classify_judges_each_page_from_its_own_band(tmp_path, monkeypat
         ("handwritten", "rujuk", "legacy", False),
     ]
     # Two Vision calls for the whole stack -- the same as ONE per-file classify.
-    assert _FakeStackClient.calls == [("ms", "en"), ("ar",)]
+    assert _FakeStackEngine.calls == [("ms", "en"), ("ar",)]
 
 
-def test_stacked_classify_rejects_pdfs_and_oversized_stacks(tmp_path, monkeypatch):
+def test_stacked_classify_rejects_oversized_stacks(tmp_path, monkeypatch):
     import pytest
-
-    pdf = tmp_path / "doc.pdf"
-    pdf.write_bytes(b"%PDF-1.4\n")
-    with pytest.raises(ValueError, match="single-image"):
-        triage.classify_files_stacked([pdf], allowed_extensions=[".pdf"])
 
     image = tmp_path / "page.jpg"
     _write_jpg(image, 100)
@@ -435,3 +436,64 @@ def test_jawi_threshold_catches_real_jawi_pages_and_never_a_rumi_one():
         assert is_jawi, proportion
     is_jawi, measured, _ = triage._assess_jawi(page(0, 800), page(0, 700), threshold)
     assert not is_jawi and measured == 0.0
+
+
+
+def test_a_stack_of_only_typed_forms_skips_the_jawi_pass(tmp_path, monkeypatch):
+    files = []
+    for index in range(3):
+        path = tmp_path / f"page{index}.jpg"
+        _write_jpg(path, 100)
+        files.append(path)
+    _FakeStackEngine.calls = []
+    _FakeStackEngine.band_blocks = {
+        ("ms", "en"): [
+            ((40, 60), "SURAT PERAKUAN NIKAH TAHUN 1984"),
+            ((220, 240), "SURAT PERAKUAN CERAI"),
+            ((400, 420), "SURAT PERAKUAN RUJUK"),
+        ],
+    }
+    monkeypatch.setattr(triage, "GoogleVisionOcrEngine", _FakeStackEngine)
+
+    results = triage.classify_files_stacked(files, allowed_extensions=[".jpg"])
+
+    assert [(r.doc_type, r.record_type, r.layout_variant) for r in results] == [
+        ("typed", "nikah", "legacy"),
+        ("typed", "cerai", "modern"),
+        ("typed", "rujuk", "modern"),
+    ]
+    assert _FakeStackEngine.calls == [("ms", "en")]  # 1 Vision call for 3 forms
+
+
+
+def test_a_stamp_mentioning_another_certificate_does_not_win_over_the_title(tmp_path, monkeypatch):
+    """Real Rujuk-modern sample: a 'TELAH BERCERAI ... DAFTAR CERAI' stamp next
+    to the 'SURAT PERAKUAN RUJU'' title must not merge into it."""
+    import pymupdf
+
+    path = tmp_path / "rujuk.pdf"
+    document = pymupdf.open()
+    document.new_page(width=595, height=842)
+    document.save(path)
+    document.close()
+    _FakeStackEngine.calls = []
+    _FakeStackEngine.band_blocks = {
+        ("ms", "en"): [
+            ((30, 40), "NO. SIRI SURAT PERAKUAN CERAI / RUJU'"),
+            ((60, 70), "SURAT PERAKUAN RUJU'"),
+        ],
+    }
+    monkeypatch.setattr(triage, "GoogleVisionOcrEngine", _FakeStackEngine)
+
+    (result,) = triage.classify_files_stacked([path], allowed_extensions=[".pdf"])
+
+    assert (result.doc_type, result.record_type) == ("typed", "rujuk")
+
+
+def test_the_standalone_title_wins_over_a_mention_elsewhere():
+    # Rujuk form with a registrar's stamp mentioning "Surat Perakuan Cerai".
+    rujuk = "ENAKMEN UNDANG-UNDANG KELUARGA ISLAM\nNO. SIRI SURAT PERAKUAN CERAI / RUJU'\nSURAT PERAKUAN RUJU'\nBILANGAN DAFTAR RUJUK"
+    assert triage._classify_headers(rujuk)[:2] == ("typed", "rujuk")
+    # Cerai form whose field label mentions "Surat Perakuan Rujuk".
+    cerai = "SURAT PERAKUAN CERAI\n3. BILANGAN DAFTAR SURAT PERAKUAN RUJUK: -"
+    assert triage._classify_headers(cerai)[:2] == ("typed", "cerai")
