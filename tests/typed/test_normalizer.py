@@ -65,8 +65,31 @@ def test_normalize_mas_kahwin_handles_typewriter_punctuation_and_bare_amounts() 
     assert normalize_mas_kahwin("1,000/=") == "RM 1,000"
     assert normalize_mas_kahwin("300/-") == "RM 300"
     assert normalize_mas_kahwin("35/92") is None
-    assert normalize_mas_kahwin("Seratus ringgit") is None
+    assert normalize_mas_kahwin("Hutang ringgit") is None
     assert normalize_mas_kahwin("") is None
+
+
+def test_normalize_mas_kahwin_reads_malay_number_words() -> None:
+    assert normalize_mas_kahwin("lapan puluh") == "RM 80"
+    assert normalize_mas_kahwin("lapan Puluh") == "RM 80"
+    assert normalize_mas_kahwin("Satu Ribu") == "RM 1,000"
+    assert normalize_mas_kahwin("seribu ringgit sahaja") == "RM 1,000"
+    assert normalize_mas_kahwin("seratus") == "RM 100"
+    assert normalize_mas_kahwin("Dua Ribu Lima Ratus") == "RM 2,500"
+    assert normalize_mas_kahwin("dua puluh lima ringgit") == "RM 25"
+    assert normalize_mas_kahwin("dua belas") == "RM 12"
+    assert normalize_mas_kahwin("sebelas") == "RM 11"
+    assert normalize_mas_kahwin("sepuluh") == "RM 10"
+    assert normalize_mas_kahwin("seratus ringgit lima puluh sen") == "RM 100.50"
+    assert normalize_mas_kahwin("empat puluh ringgit") == "RM 40"
+
+
+def test_normalize_mas_kahwin_rejects_words_it_cannot_read() -> None:
+    assert normalize_mas_kahwin("tiada") is None
+    assert normalize_mas_kahwin("lapan puluh lagi") is None
+    assert normalize_mas_kahwin("Seratus Ringgit Mas Kahwin Hutang") is None
+    assert normalize_mas_kahwin("kosong") is None
+    assert normalize_mas_kahwin("ringgit") is None
 
 
 def test_normalize_mas_kahwin_preserves_rm_full_text() -> None:

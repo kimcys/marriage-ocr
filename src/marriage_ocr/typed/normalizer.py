@@ -562,13 +562,69 @@ def normalize_birth_year_or_date(raw: str | None) -> str | None:
     return None
 
 
+_MALAY_UNITS = {
+    "kosong": 0, "sifar": 0, "satu": 1, "se": 1, "dua": 2, "tiga": 3, "empat": 4, "lima": 5,
+    "enam": 6, "tujuh": 7, "lapan": 8, "sembilan": 9,
+}  # fmt: skip
+_MALAY_FILLER = {"dan", "sahaja", "rm", "malaysia"}
+_MALAY_SPLIT = re.compile(r"(?<![a-z])se(?=(?:ribu|ratus|puluh|belas)\b)")
+
+
+def _malay_words_to_int(words: list[str]) -> int | None:
+    """"lapan puluh" -> 80, "dua ribu lima ratus" -> 2500, "sebelas" -> 11.
+    None unless EVERY word is a recognised number word -- an unknown word
+    means this is not an amount we can safely read."""
+    total = current = pending = 0
+    seen = False
+    for word in words:
+        if word == "sepuluh":
+            pending, seen = 10, True
+        elif word == "sebelas":
+            pending, seen = 11, True
+        elif word in _MALAY_UNITS:
+            pending, seen = _MALAY_UNITS[word], True
+        elif word == "belas":
+            current, pending, seen = current + (pending or 1) + 10, 0, True
+        elif word == "puluh":
+            current, pending, seen = current + (pending or 1) * 10, 0, True
+        elif word == "ratus":
+            current, pending, seen = current + (pending or 1) * 100, 0, True
+        elif word == "ribu":
+            total, current, pending, seen = total + ((current + pending) or 1) * 1000, 0, 0, True
+        else:
+            return None
+    return total + current + pending if seen else None
+
+
+def _normalize_malay_words_amount(text: str) -> str | None:
+    """A Mas Kahwin written out in words ("lapan puluh", "Satu Ribu ringgit",
+    "seratus ringgit lima puluh sen"). Returns "RM 80" / "RM 1,000" / "RM 100.50"."""
+    lowered = _MALAY_SPLIT.sub("se ", re.sub(r"[^a-z\s]", " ", text.lower()))
+    words = [w for w in lowered.split() if w not in _MALAY_FILLER]
+    if "ringgit" in words:
+        split_at = words.index("ringgit")
+        ringgit_words, rest = words[:split_at], words[split_at + 1 :]
+    else:
+        ringgit_words, rest = words, []
+    cents_words = [w for w in rest if w != "sen"]
+    ringgit = _malay_words_to_int(ringgit_words)
+    if ringgit is None or ringgit <= 0:
+        return None
+    if not cents_words:
+        return f"RM {ringgit:,}"
+    cents = _malay_words_to_int(cents_words)
+    if cents is None or not 0 < cents < 100:
+        return None
+    return f"RM {ringgit:,}.{cents:02d}"
+
+
 def normalize_mas_kahwin(raw: str | None) -> str | None:
     if raw is None:
         return None
     text = str(raw).strip()
     match = MAS_KAHWIN_PATTERN.search(text) or _BARE_AMOUNT_PATTERN.match(text)
     if not match:
-        return None
+        return _normalize_malay_words_amount(text)
     numeric = match.group(1).replace(" ", "")
     # A typewriter's decimal point often reads as a comma ("$ 80,00"): exactly
     # two digits after the only comma is cents, not a thousands group.
