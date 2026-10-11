@@ -87,6 +87,10 @@ TYPED_CSV_COLUMNS = [
     "Retry Count",
     "Error Message",
     "Duplicate Of Source File",
+    # What the reader returned before normalization. "Mas Kahwin" above is
+    # blanked when the text has no recognizable amount, which made it
+    # impossible to tell "form is blank" from "reader/normalizer lost it".
+    "Mas Kahwin Raw",
 ]
 
 
@@ -258,6 +262,7 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Retry Count": _value(result.retry_count),
         "Error Message": _value(result.error_message),
         "Duplicate Of Source File": "",
+        "Mas Kahwin Raw": _value(record.mas_kahwin_raw),
     }
 
 

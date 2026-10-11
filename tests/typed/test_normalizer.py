@@ -56,6 +56,19 @@ def test_normalize_date_normalizes_to_day_month_year() -> None:
     assert normalize_date_preserving_style("25 ZULHIJJAH 1404\n21.09.1984") == "21-09-1984"
 
 
+def test_normalize_mas_kahwin_handles_typewriter_punctuation_and_bare_amounts() -> None:
+    assert normalize_mas_kahwin("$.80.00") == "RM 80.00"
+    assert normalize_mas_kahwin("$. 80.00") == "RM 80.00"
+    assert normalize_mas_kahwin("$ 80,00") == "RM 80.00"
+    assert normalize_mas_kahwin("$ 1,300.00") == "RM 1,300.00"
+    assert normalize_mas_kahwin("80.00") == "RM 80.00"
+    assert normalize_mas_kahwin("1,000/=") == "RM 1,000"
+    assert normalize_mas_kahwin("300/-") == "RM 300"
+    assert normalize_mas_kahwin("35/92") is None
+    assert normalize_mas_kahwin("Seratus ringgit") is None
+    assert normalize_mas_kahwin("") is None
+
+
 def test_normalize_mas_kahwin_preserves_rm_full_text() -> None:
     assert normalize_mas_kahwin("Mas Kahwin RM80.00") == "RM 80.00"
     assert normalize_mas_kahwin("RM1 500.00") == "RM 1,500.00"

@@ -22,7 +22,7 @@ def test_csv_columns_match_approved_order() -> None:
         "IC Baru Suami",
         "Umur Suami",
     ]
-    assert TYPED_CSV_COLUMNS[-7:] == [
+    assert TYPED_CSV_COLUMNS[-8:] == [
         "Source File",
         "Processing Status",
         "Review Required",
@@ -30,6 +30,7 @@ def test_csv_columns_match_approved_order() -> None:
         "Retry Count",
         "Error Message",
         "Duplicate Of Source File",
+        "Mas Kahwin Raw",
     ]
 
 

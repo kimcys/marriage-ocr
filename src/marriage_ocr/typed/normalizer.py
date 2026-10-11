@@ -18,7 +18,14 @@ DATE_PATTERN = re.compile(r"\b(\d{1,2})\s*([./-])\s*(\d{1,2})\s*\2\s*(\d{4})\b")
 # "$" prefix (pre-Ringgit-renaming Malaysian dollar notation) rather than
 # "RM" -- widened to accept either so the same pattern/normalizer covers
 # mas_kahwin, bayaran_tebus_talak, and jumlah_bayaran alike.
-MAS_KAHWIN_PATTERN = re.compile(r"(?:RM|\$)\s*([0-9][0-9\s,]*(?:\.[0-9]{1,2})?)", re.IGNORECASE)
+# "[\s.:]*" after the prefix tolerates the stray typewriter punctuation these
+# forms print between the symbol and the digits ("$. 80.00", "$:80.00").
+MAS_KAHWIN_PATTERN = re.compile(r"(?:RM|\$)[\s.:]*([0-9][0-9\s,]*(?:\.[0-9]{1,2})?)", re.IGNORECASE)
+# An amount typed with no currency symbol at all ("80.00", "1,000/=", "300/-"),
+# accepted only when that is the entire value -- never searched for inside
+# longer text, so a stray number can't be mistaken for an amount.
+_BARE_AMOUNT_PATTERN = re.compile(r"^[\s.:*]*([0-9][0-9\s,]*(?:\.[0-9]{1,2})?)\s*(?:/\s*[=-])?[\s.*]*$")
+_COMMA_DECIMAL = re.compile(r"\d+,\d{2}")
 _IC_DIGITS = re.compile(r"\D+")
 _LEADING_LABELS = {
     "nama_suami": re.compile(r"^\s*(\d\s*\.\s*)?(nama\s*(suami)?\s*:?\s*)", re.IGNORECASE),
@@ -559,10 +566,13 @@ def normalize_mas_kahwin(raw: str | None) -> str | None:
     if raw is None:
         return None
     text = str(raw).strip()
-    match = MAS_KAHWIN_PATTERN.search(text)
+    match = MAS_KAHWIN_PATTERN.search(text) or _BARE_AMOUNT_PATTERN.match(text)
     if not match:
         return None
-    numeric = match.group(1).replace(" ", "").replace(",", "")
+    numeric = match.group(1).replace(" ", "")
+    # A typewriter's decimal point often reads as a comma ("$ 80,00"): exactly
+    # two digits after the only comma is cents, not a thousands group.
+    numeric = numeric.replace(",", ".") if _COMMA_DECIMAL.fullmatch(numeric) else numeric.replace(",", "")
     try:
         amount = Decimal(numeric)
     except InvalidOperation:
