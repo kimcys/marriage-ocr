@@ -121,6 +121,10 @@ class TypedDocumentResult:
     failed_fields: tuple[str, ...] = ()
     retry_count: int = 0
     error_message: str = ""
+    # What the reader returned, by raw field key, for the identity fields (see
+    # pipeline.raw_text_snapshot) -- so a field that normalizes to empty can be
+    # told apart from one the reader never saw.
+    raw_text: dict[str, str] = field(default_factory=dict)
 
     @property
     def review_required(self) -> bool:

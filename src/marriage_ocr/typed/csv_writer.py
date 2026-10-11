@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -91,6 +92,8 @@ TYPED_CSV_COLUMNS = [
     # blanked when the text has no recognizable amount, which made it
     # impossible to tell "form is blank" from "reader/normalizer lost it".
     "Mas Kahwin Raw",
+    # JSON {raw field key: reader text} for the other identity fields.
+    "Raw Fields",
 ]
 
 
@@ -263,6 +266,7 @@ def _record_to_row(result: TypedDocumentResult) -> dict[str, str]:
         "Error Message": _value(result.error_message),
         "Duplicate Of Source File": "",
         "Mas Kahwin Raw": _value(record.mas_kahwin_raw),
+        "Raw Fields": json.dumps(result.raw_text, ensure_ascii=False) if result.raw_text else "",
     }
 
 

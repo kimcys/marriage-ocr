@@ -350,7 +350,25 @@ def _process_single_pdf(
         processing_status=status,
         failed_fields=summary.failed_fields,
         retry_count=retry_count,
+        raw_text=raw_text_snapshot(raw_fields),
     )
+
+
+# Raw keys worth keeping the reader's own text for: the fields that decide
+# whether a record needs review. Addresses etc. stay out to keep rows small;
+# mas_kahwin has its own "Mas Kahwin Raw" column.
+RAW_TEXT_KEYS = (
+    "bil", "nama_suami", "id_suami", "umur_suami", "nama_isteri", "id_isteri", "umur_isteri",
+    "nama_wali", "hubungan_wali", "saksi_1", "saksi_2", "tarikh_nikah", "tarikh_cerai", "tarikh_rujuk",
+)  # fmt: skip
+
+
+def raw_text_snapshot(raw_fields: Mapping[str, RawField]) -> dict[str, str]:
+    return {
+        key: raw_fields[key].raw_text.strip()
+        for key in RAW_TEXT_KEYS
+        if key in raw_fields and raw_fields[key].raw_text.strip()
+    }
 
 
 RawFieldsProvider = Callable[[Path, str, str], "dict[str, RawField] | None"]
@@ -419,6 +437,7 @@ def _result_from_raw_fields(
         processing_status=status,
         failed_fields=summary.failed_fields,
         retry_count=0,
+        raw_text=raw_text_snapshot(raw_fields),
     )
 
 

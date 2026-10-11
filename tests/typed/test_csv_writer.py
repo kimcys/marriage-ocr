@@ -22,7 +22,7 @@ def test_csv_columns_match_approved_order() -> None:
         "IC Baru Suami",
         "Umur Suami",
     ]
-    assert TYPED_CSV_COLUMNS[-8:] == [
+    assert TYPED_CSV_COLUMNS[-9:] == [
         "Source File",
         "Processing Status",
         "Review Required",
@@ -31,6 +31,7 @@ def test_csv_columns_match_approved_order() -> None:
         "Error Message",
         "Duplicate Of Source File",
         "Mas Kahwin Raw",
+        "Raw Fields",
     ]
 
 
@@ -463,3 +464,20 @@ def test_blank_umur_stays_empty_on_cerai_rows(tmp_path: Path) -> None:
     assert rows["cerai.pdf"]["Umur Isteri"] == ""
     assert rows["cerai.pdf"]["Umur Wali"] == ""
 
+
+
+def test_raw_fields_column_carries_reader_text_as_json(tmp_path: Path) -> None:
+    import json
+    from dataclasses import replace
+
+    output = tmp_path / "typed_records.csv"
+    store = TypedCsvStore.load(output, reset_output=True, skip_existing=False)
+    base = _result("a.pdf", "01/2009", ProcessingStatus.REVIEW_REQUIRED)
+    store.upsert(replace(base, raw_text={"id_suami": "A0785338", "bil": "01/2009"}))
+    store.upsert(_result("b.pdf", "02/2009", ProcessingStatus.SUCCESS))
+    store.flush()
+
+    with output.open(newline="", encoding="utf-8-sig") as handle:
+        rows = {row["Source File"]: row for row in csv.DictReader(handle)}
+    assert json.loads(rows["a.pdf"]["Raw Fields"]) == {"id_suami": "A0785338", "bil": "01/2009"}
+    assert rows["b.pdf"]["Raw Fields"] == ""
