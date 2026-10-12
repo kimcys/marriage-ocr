@@ -24,7 +24,9 @@ MAS_KAHWIN_PATTERN = re.compile(r"(?:RM|\$)[\s.:]*([0-9][0-9\s,]*(?:\.[0-9]{1,2}
 # An amount typed with no currency symbol at all ("80.00", "1,000/=", "300/-"),
 # accepted only when that is the entire value -- never searched for inside
 # longer text, so a stray number can't be mistaken for an amount.
-_BARE_AMOUNT_PATTERN = re.compile(r"^[\s.:*]*([0-9][0-9\s,]*(?:\.[0-9]{1,2})?)\s*(?:/\s*[=-])?[\s.*]*$")
+_BARE_AMOUNT_PATTERN = re.compile(
+    r"^[\s.:*]*([0-9][0-9\s,]*(?:\.[0-9]{1,2})?)\s*(?:/\s*[=-])?\s*(?:\(\s*tunai\s*\))?[\s.*]*$", re.IGNORECASE
+)
 _COMMA_DECIMAL = re.compile(r"\d+,\d{2}")
 _IC_DIGITS = re.compile(r"\D+")
 _LEADING_LABELS = {
@@ -649,6 +651,36 @@ def normalize_mas_kahwin(raw: str | None) -> str | None:
     return f"RM {int(normalized):,}"
 
 
+_AMOUNT_IN_WORDS = re.compile(r"\b(?:ringgit|sen)\b", re.IGNORECASE)
+_MAX_MAS_KAHWIN_TEXT = 120
+_NO_VALUE_WORDS = frozenset({"tiada", "kosong", "nil", "none", "n/a"})
+
+
+def normalize_mas_kahwin_value(raw: str | None) -> str | None:
+    """Mas kahwin as "RM ..." when it is an amount; otherwise the text as written.
+
+    Some forms record the mas kahwin in kind or in another currency ("1 DINAR EMAS",
+    "20 POUND STERLING", "125 BATH"). That is a real value, so it is kept verbatim
+    (upper-cased, whitespace tidied) instead of being dropped. Anything that reads
+    as an amount in ringgit words but could not be converted stays empty so it is
+    reviewed by a person.
+    """
+    amount = normalize_mas_kahwin(raw)
+    if amount is not None or raw is None:
+        return amount
+    text = " ".join(str(raw).split())
+    text = re.sub(r"\(\s*(.*?)\s*\)", r"(\1)", text)
+    text = re.sub(r"^RM\s+(?=[^\d\s])", "", text, flags=re.IGNORECASE)
+    if (
+        not re.search(r"[A-Za-z]", text)
+        or text.lower() in _NO_VALUE_WORDS
+        or _AMOUNT_IN_WORDS.search(text)
+        or len(text) > _MAX_MAS_KAHWIN_TEXT
+    ):
+        return None
+    return text.upper()
+
+
 # Generic alias for reuse on Cerai's bayaran_tebus_talak and the legacy
 # forms' jumlah_bayaran -- same "RM or $" amount shape as mas_kahwin,
 # normalized uniformly to "RM ..." regardless of which prefix the source
@@ -1111,7 +1143,7 @@ def _build_nikah_record(raw_fields: dict[str, RawField]) -> ExtractedRecord:
     ic_lama_isteri, ic_baru_isteri = normalize_ic(raw_fields.get("id_isteri").raw_text if raw_fields.get("id_isteri") else None)
     umur_isteri = normalize_age(raw_fields.get("umur_isteri").raw_text if raw_fields.get("umur_isteri") else None, min_age=16, max_age=120)
 
-    mas_kahwin = normalize_mas_kahwin(raw_fields.get("mas_kahwin").raw_text if raw_fields.get("mas_kahwin") else None)
+    mas_kahwin = normalize_mas_kahwin_value(raw_fields.get("mas_kahwin").raw_text if raw_fields.get("mas_kahwin") else None)
     nama_pendaftar = normalize_plain_text(raw_fields.get("nama_pendaftar").raw_text if raw_fields.get("nama_pendaftar") else None, field_key="nama_pendaftar")
     alamat_pendaftar = normalize_plain_text(raw_fields.get("alamat_pendaftar").raw_text if raw_fields.get("alamat_pendaftar") else None, field_key="alamat_pendaftar")
     nama_wali = normalize_name(raw_fields.get("nama_wali").raw_text if raw_fields.get("nama_wali") else None, field_key="nama_wali")
@@ -1248,7 +1280,7 @@ def _build_nikah_typed_record(raw_fields: dict[str, RawField], *, template_name:
         nama_pendaftar=normalize_plain_text(_raw(raw_fields, "nama_pendaftar"), field_key="nama_pendaftar"),
         pernikahan_kali=normalize_plain_text(_raw(raw_fields, "pernikahan_kali"), field_key="pernikahan_kali"),
         isteri_ke=normalize_plain_text(_raw(raw_fields, "isteri_ke"), field_key="isteri_ke"),
-        mas_kahwin=normalize_mas_kahwin(_raw(raw_fields, "mas_kahwin")),
+        mas_kahwin=normalize_mas_kahwin_value(_raw(raw_fields, "mas_kahwin")),
         mas_kahwin_raw=_raw(raw_fields, "mas_kahwin"),
         belanja_hantaran=normalize_plain_text(_raw(raw_fields, "belanja_hantaran"), field_key="belanja_hantaran"),
         pemberian_lain=normalize_plain_text(_raw(raw_fields, "pemberian_lain"), field_key="pemberian_lain"),

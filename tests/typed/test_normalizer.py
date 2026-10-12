@@ -9,6 +9,7 @@ from marriage_ocr.typed.normalizer import (
     normalize_ic,
     normalize_jawatan,
     normalize_mas_kahwin,
+    normalize_mas_kahwin_value,
     normalize_plain_text,
     normalize_wrapped_field,
 )
@@ -82,6 +83,31 @@ def test_normalize_mas_kahwin_reads_malay_number_words() -> None:
     assert normalize_mas_kahwin("sepuluh") == "RM 10"
     assert normalize_mas_kahwin("seratus ringgit lima puluh sen") == "RM 100.50"
     assert normalize_mas_kahwin("empat puluh ringgit") == "RM 40"
+
+
+def test_normalize_mas_kahwin_accepts_tunai_suffix_without_rm() -> None:
+    assert normalize_mas_kahwin("300.00 (TUNAI)") == "RM 300.00"
+    assert normalize_mas_kahwin("300.00 ( TUNAI )") == "RM 300.00"
+    assert normalize_mas_kahwin("1,000.00 (TUNAI)") == "RM 1,000.00"
+    assert normalize_mas_kahwin("300 (TUNAI)") == "RM 300"
+
+
+def test_normalize_mas_kahwin_value_keeps_in_kind_and_foreign_amounts() -> None:
+    assert normalize_mas_kahwin_value("300.00 (TUNAI)") == "RM 300.00"
+    assert normalize_mas_kahwin_value("20 POUND STERLING") == "20 POUND STERLING"
+    assert normalize_mas_kahwin_value("125 Bath") == "125 BATH"
+    assert normalize_mas_kahwin_value("1 DINAR EMAS ( TUNAI )") == "1 DINAR EMAS (TUNAI)"
+    assert normalize_mas_kahwin_value("RM SEUTAS RANTAI EMAS") == "SEUTAS RANTAI EMAS"
+    assert normalize_mas_kahwin_value("RP 100,000") == "RP 100,000"
+
+
+def test_normalize_mas_kahwin_value_leaves_unreadable_text_empty() -> None:
+    assert normalize_mas_kahwin_value("tiada") is None
+    assert normalize_mas_kahwin_value("Seratus Ringgit Mas Kahwin Hutang") is None
+    assert normalize_mas_kahwin_value("35/92") is None
+    assert normalize_mas_kahwin_value("") is None
+    assert normalize_mas_kahwin_value(None) is None
+    assert normalize_mas_kahwin_value("A" * 200) is None
 
 
 def test_normalize_mas_kahwin_rejects_words_it_cannot_read() -> None:
