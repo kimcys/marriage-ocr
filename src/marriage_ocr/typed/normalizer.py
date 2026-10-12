@@ -25,7 +25,7 @@ MAS_KAHWIN_PATTERN = re.compile(r"(?:RM|\$)[\s.:]*([0-9][0-9\s,]*(?:\.[0-9]{1,2}
 # accepted only when that is the entire value -- never searched for inside
 # longer text, so a stray number can't be mistaken for an amount.
 _BARE_AMOUNT_PATTERN = re.compile(
-    r"^[\s.:*]*([0-9][0-9\s,]*(?:\.[0-9]{1,2})?)\s*(?:/\s*[=-])?\s*(?:\(\s*tunai\s*\))?[\s.*]*$", re.IGNORECASE
+    r"^[\s.:*]*([0-9][0-9\s,]*(?:\.[0-9]{1,2})?)\s*(?:/\s*[=-])?\s*(?:\(?\s*tunai\s*\)?)?[\s.*]*$", re.IGNORECASE
 )
 _COMMA_DECIMAL = re.compile(r"\d+,\d{2}")
 _IC_DIGITS = re.compile(r"\D+")

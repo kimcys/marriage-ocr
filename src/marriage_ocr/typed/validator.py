@@ -6,7 +6,7 @@ from typing import Mapping, Sequence
 from marriage_ocr.models import ExtractedRecord
 from marriage_ocr.refinement.text_corrections import is_valid_malaysian_ic
 from marriage_ocr.typed.models import FieldDiagnostic, ProcessingStatus, RawField, ValidationSummary
-from marriage_ocr.typed.normalizer import BIL_PATTERN, DATE_PATTERN, MAS_KAHWIN_PATTERN
+from marriage_ocr.typed.normalizer import BIL_PATTERN, DATE_PATTERN
 
 
 RETRY_PRIORITY_BORANG_4B = (
@@ -140,9 +140,10 @@ def _valid_date(value: str | None) -> bool:
 
 
 def _valid_mas_kahwin(value: str | None) -> bool:
-    if not value:
-        return False
-    return bool(MAS_KAHWIN_PATTERN.search(value))
+    # normalize_mas_kahwin_value already decided what is usable: an "RM ..." amount, or the text
+    # as written for an in-kind / foreign-currency mas kahwin ("1 DINAR EMAS", "125 BATH").
+    # Anything it could not use arrives here as None, so any non-empty value is valid.
+    return bool(value and value.strip())
 
 
 def _non_label_text(value: str, label: str) -> bool:

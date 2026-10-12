@@ -90,6 +90,8 @@ def test_normalize_mas_kahwin_accepts_tunai_suffix_without_rm() -> None:
     assert normalize_mas_kahwin("300.00 ( TUNAI )") == "RM 300.00"
     assert normalize_mas_kahwin("1,000.00 (TUNAI)") == "RM 1,000.00"
     assert normalize_mas_kahwin("300 (TUNAI)") == "RM 300"
+    assert normalize_mas_kahwin("300.00 TUNAI") == "RM 300.00"
+    assert normalize_mas_kahwin("50.00 TUNAI") == "RM 50.00"
 
 
 def test_normalize_mas_kahwin_value_keeps_in_kind_and_foreign_amounts() -> None:

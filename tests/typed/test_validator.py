@@ -119,3 +119,18 @@ def test_multiline_age_raw_text_does_not_trigger_false_failure() -> None:
     summary = validate_record(record, raw_fields, word_confidence_threshold=0.75, max_retry_fields=6)
     assert "Umur Suami" not in summary.failed_fields
     assert "Umur Isteri" not in summary.failed_fields
+
+
+def test_in_kind_mas_kahwin_kept_as_written_is_not_a_failed_field() -> None:
+    record = _valid_record()
+    record.mas_kahwin = "1 DINAR EMAS"
+    summary = validate_record(record, {}, word_confidence_threshold=0.75, max_retry_fields=6)
+    assert "Mas Kahwin" not in summary.failed_fields
+    assert status_for_result(summary, retry_count=0) is ProcessingStatus.SUCCESS
+
+
+def test_empty_mas_kahwin_is_still_a_failed_field() -> None:
+    record = _valid_record()
+    record.mas_kahwin = None
+    summary = validate_record(record, {}, word_confidence_threshold=0.75, max_retry_fields=6)
+    assert "Mas Kahwin" in summary.failed_fields
