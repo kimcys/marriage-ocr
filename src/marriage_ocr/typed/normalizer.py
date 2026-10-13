@@ -569,6 +569,7 @@ _MALAY_UNITS = {
     "enam": 6, "tujuh": 7, "lapan": 8, "sembilan": 9,
 }  # fmt: skip
 _MALAY_FILLER = {"dan", "sahaja", "rm", "malaysia"}
+_MAGNITUDES = frozenset({"puluh", "belas", "ratus", "ribu"})
 _MALAY_SPLIT = re.compile(r"(?<![a-z])se(?=(?:ribu|ratus|puluh|belas)\b)")
 
 
@@ -578,7 +579,13 @@ def _malay_words_to_int(words: list[str]) -> int | None:
     means this is not an amount we can safely read."""
     total = current = pending = 0
     seen = False
+    previous = ""
     for word in words:
+        # A magnitude word right after another one, with no number between them ("sepuluh puluh" =
+        # "ten tens"), is not a quantity anyone writes: refuse it rather than add the pieces up.
+        if word in _MAGNITUDES and previous in _MAGNITUDES and previous != "se" and pending == 0:
+            return None
+        previous = word
         if word == "sepuluh":
             pending, seen = 10, True
         elif word == "sebelas":
@@ -654,6 +661,18 @@ def normalize_mas_kahwin(raw: str | None) -> str | None:
 _AMOUNT_IN_WORDS = re.compile(r"\b(?:ringgit|sen)\b", re.IGNORECASE)
 _MAX_MAS_KAHWIN_TEXT = 120
 _NO_VALUE_WORDS = frozenset({"tiada", "kosong", "nil", "none", "n/a"})
+_BARE_CURRENCY = frozenset({"RM", "MYR", "USD", "SGD", "AUD", "RP"})
+_NUMBER_WORDS = frozenset({*_MALAY_UNITS, "sepuluh", "sebelas", "puluh", "belas", "ratus", "ribu", "se", "seratus", "seribu"})
+
+
+def _only_number_words(text: str) -> bool:
+    """True for text made only of Malay number words (an amount in words the parser refused):
+    keeping it as an "in kind" value would hide an unreadable amount."""
+    words = [w for w in re.sub(r"[^a-z\s]", " ", text.lower()).split() if w not in _MALAY_FILLER]
+    return bool(words) and all(w in _NUMBER_WORDS or w in _MALAY_SPLIT_WORDS for w in words)
+
+
+_MALAY_SPLIT_WORDS = frozenset({"seratus", "seribu", "sepuluh", "sebelas"})
 
 
 def normalize_mas_kahwin_value(raw: str | None) -> str | None:
@@ -671,8 +690,11 @@ def normalize_mas_kahwin_value(raw: str | None) -> str | None:
     text = " ".join(str(raw).split())
     text = re.sub(r"\(\s*(.*?)\s*\)", r"(\1)", text)
     text = re.sub(r"^RM\s+(?=[^\d\s])", "", text, flags=re.IGNORECASE)
+    letters = re.sub(r"[^A-Za-z]", "", text).upper()
     if (
         not re.search(r"[A-Za-z]", text)
+        or (letters in _BARE_CURRENCY and not re.search(r"\d", text))
+        or _only_number_words(text)
         or text.lower() in _NO_VALUE_WORDS
         or _AMOUNT_IN_WORDS.search(text)
         or len(text) > _MAX_MAS_KAHWIN_TEXT

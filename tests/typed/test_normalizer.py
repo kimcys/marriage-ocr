@@ -780,3 +780,20 @@ def test_hijri_date_fields_do_not_self_erase_their_own_hijrah_masihi_row(field_k
         normalize_plain_text("Hijrah 27 RAMADHAN 1431\nMasihi 06.09.2010", field_key=field_key)
         == "27 RAMADHAN 1431"
     )
+
+
+def test_a_magnitude_word_stacked_on_another_is_refused() -> None:
+    assert normalize_mas_kahwin("Sepuluh Puluh") is None  # "ten tens"
+    assert normalize_mas_kahwin("puluh puluh") is None
+    assert normalize_mas_kahwin("lapan puluh") == "RM 80"
+    assert normalize_mas_kahwin("Sepuluh") == "RM 10"
+    assert normalize_mas_kahwin("seratus lima puluh") == "RM 150"
+    assert normalize_mas_kahwin("dua ribu lima ratus") == "RM 2,500"
+    assert normalize_mas_kahwin("sebelas") == "RM 11"
+
+
+def test_bare_currency_or_unreadable_number_words_are_not_kept_as_in_kind_values() -> None:
+    assert normalize_mas_kahwin_value("RM") is None
+    assert normalize_mas_kahwin_value("rm.") is None
+    assert normalize_mas_kahwin_value("Sepuluh Puluh") is None
+    assert normalize_mas_kahwin_value("SATU DINAR EMAS") == "SATU DINAR EMAS"
