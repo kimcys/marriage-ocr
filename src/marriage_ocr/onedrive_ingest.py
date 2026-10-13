@@ -275,8 +275,11 @@ def download_anonymous_share(
 # _download_all_rows_via_browser), so an unbounded folder could otherwise
 # hold a worker for a very long time. Applied independently at every level
 # of the tree, not as one global budget across the whole share.
-_MAX_BROWSER_DOWNLOAD_ITEMS = 300
+_MAX_BROWSER_DOWNLOAD_ITEMS = 1000
 _BROWSER_DOWNLOAD_TIMEOUT_MS = 60_000
+# How many times a browser pass that downloads nothing is re-run (page reloaded
+# in between) before giving up -- an empty pass is usually transient.
+_BROWSER_PASS_ATTEMPTS = 2
 
 # Safety cap on how deep `_download_all_rows_via_browser` will recurse into
 # nested sub-folders, purely to bound a pathological/cyclic tree -- real
@@ -375,6 +378,7 @@ def _download_all_rows_via_browser(
     skip: set[str] | None = None,
     _root: Path | None = None,
     _skipped: list[str] | None = None,
+    _failures: list[str] | None = None,
 ) -> list[Path]:
     """Folder-listing shape: one row per file or sub-folder, each with its
     own "..." (Show more actions) menu. Downloads each file individually via
@@ -407,6 +411,11 @@ def _download_all_rows_via_browser(
     passes the ones it already ingested. Their names are appended to
     `_skipped` so the caller can tell "everything was skipped" apart from
     "nothing recognizable on the page".
+
+    A row whose download throws is retried once (a transient overlay/menu
+    glitch usually clears), and a row that still fails is recorded in
+    `_failures` so the caller can report the real cause instead of a
+    misleading "unrecognizable page".
     """
     root = _root if _root is not None else dest_dir
     if _depth > _MAX_BROWSER_FOLDER_DEPTH:
@@ -420,6 +429,7 @@ def _download_all_rows_via_browser(
     listing_url = page.url
     downloaded: list[Path] = []
     seen: set[str] = set()
+    retried: set[str] = set()
 
     while len(seen) < _MAX_BROWSER_DOWNLOAD_ITEMS:
         if remaining is not None and not remaining:
@@ -452,6 +462,7 @@ def _download_all_rows_via_browser(
                         skip=skip,
                         _root=root,
                         _skipped=_skipped,
+                        _failures=_failures,
                     )
                 )
                 if remaining is not None and not remaining:
@@ -495,8 +506,11 @@ def _download_all_rows_via_browser(
             if menu_item.count() == 0:
                 continue
 
+            # `.last`: a previously opened row menu can linger in the DOM, and
+            # `.first` would then click the stale one (seen as 2 "Download"
+            # items after the second row).
             with page.expect_download(timeout=_BROWSER_DOWNLOAD_TIMEOUT_MS) as dl_info:
-                menu_item.first.click(timeout=10_000)
+                menu_item.last.click(timeout=10_000)
             download = dl_info.value
             dest_dir.mkdir(parents=True, exist_ok=True)
             # Named after the row's own display name (known upfront, and
@@ -509,10 +523,23 @@ def _download_all_rows_via_browser(
             downloaded.append(target)
             if remaining is not None:
                 remaining.discard(name.lower())
-        except Exception:
+        except Exception as exc:
             # One stuck/overlay-covered row shouldn't sacrifice every other
-            # item in the folder -- log and move on to the next row.
+            # item in the folder -- retry it once, then log and move on.
+            if name not in retried:
+                retried.add(name)
+                seen.discard(name)
+                LOGGER.warning("Browser download failed for folder row %r (%s); retrying once", name, exc)
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+                continue
             LOGGER.exception("Browser download failed for folder row %r; skipping it", name)
+            if _failures is not None:
+                reason = (str(exc).strip().splitlines() or [""])[0][:160]
+                _failures.append(f"{name}: {type(exc).__name__}: {reason}")
             continue
 
     if len(seen) >= _MAX_BROWSER_DOWNLOAD_ITEMS:
@@ -581,9 +608,23 @@ def _download_via_browser(
 
             remaining = set(only) if only is not None else None
             skipped: list[str] = []
-            downloaded = _download_all_rows_via_browser(
-                page, dest_dir, remaining=remaining, skip=skip, _skipped=skipped
-            )
+            failures: list[str] = []
+            downloaded: list[Path] = []
+            for attempt in range(1, _BROWSER_PASS_ATTEMPTS + 1):
+                if attempt > 1:
+                    LOGGER.warning(
+                        "Browser pass %d/%d for %s found nothing; reloading and retrying.",
+                        attempt - 1,
+                        _BROWSER_PASS_ATTEMPTS,
+                        share_url,
+                    )
+                    page.goto(share_url, wait_until="networkidle", timeout=60_000)
+                    page.wait_for_timeout(3000)
+                downloaded = _download_all_rows_via_browser(
+                    page, dest_dir, remaining=remaining, skip=skip, _skipped=skipped, _failures=failures
+                )
+                if downloaded or skipped or only is not None:
+                    break
             if only is not None or (not downloaded and skipped):
                 # A filtered pull legitimately finding nothing (the file was
                 # removed from the share -- the caller reports which names
@@ -593,11 +634,18 @@ def _download_via_browser(
             if not downloaded:
                 downloaded = _download_single_item_via_browser(page, dest_dir)
             if not downloaded:
+                if failures:
+                    raise RuntimeError(
+                        f"OneDrive listed the folder but every file download failed "
+                        f"({len(failures)} failed, e.g. {failures[0]}). This is usually transient "
+                        "(OneDrive throttling or a busy worker) -- retry the submission."
+                    )
                 raise RuntimeError(
                     "OneDrive rendered a page that isn't a recognizable file or "
-                    "folder listing -- the link may need a different sharing "
-                    "permission, or Microsoft has changed their web UI in a way "
-                    "this fallback doesn't yet handle."
+                    "folder listing (page title: "
+                    f"{page.title()!r}, url: {page.url[:120]!r}) -- the link may need a "
+                    "different sharing permission, or Microsoft has changed their web UI "
+                    "in a way this fallback doesn't yet handle."
                 )
             return downloaded
         finally:

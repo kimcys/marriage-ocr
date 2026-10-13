@@ -258,6 +258,10 @@ class _FakeLocatorList:
     def first(self):
         return self._items[0]
 
+    @property
+    def last(self):
+        return self._items[-1]
+
 
 class _FakeTextCell:
     def __init__(self, text):
