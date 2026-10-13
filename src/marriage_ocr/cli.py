@@ -664,6 +664,19 @@ def onedrive_fetch_public(
     console.print(f"[bold green]Downloaded {len(downloaded)} file(s) to {dest}[/bold green]")
 
 
+@onedrive_app.command("resolve-title")
+def onedrive_resolve_title(
+    url: str = typer.Option(..., "--url", help="OneDrive/SharePoint sharing link"),
+) -> None:
+    """Print the share link's folder/file name as JSON ({"title": ...}) without
+    downloading anything."""
+    import json
+
+    from marriage_ocr.onedrive_ingest import resolve_share_title
+
+    typer.echo(json.dumps({"title": resolve_share_title(url)}))
+
+
 @onedrive_app.command("login")
 def onedrive_login(
     client_id: str = typer.Option(

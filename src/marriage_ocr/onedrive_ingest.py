@@ -117,6 +117,34 @@ _SIGNIN_REQUIRED_MESSAGE = (
 )
 
 
+def resolve_share_title(share_url: str) -> str | None:
+    """Best-effort folder (or file) name of a share link, without downloading
+    anything. Follows redirects and reads the name off the resolved URL --
+    OneDrive's folder redirect carries the full path in `spopath` (or `id`) --
+    falling back to the Content-Disposition filename (a folder zip is named
+    after the folder). Returns None when no name can be determined."""
+    response = requests.get(share_url.strip(), timeout=60, stream=True, allow_redirects=True)
+    try:
+        response.raise_for_status()
+        if _url_is_signin_host(response.url):
+            return None
+        query = dict(parse_qsl(urlsplit(response.url).query))
+        for key in ("spopath", "id"):
+            value = query.get(key, "")
+            if "/" in value:
+                name = value.rstrip("/").rsplit("/", 1)[-1].strip()
+                if name:
+                    return name
+        if response.headers.get("Content-Disposition"):
+            name = _filename_from_response(response, fallback="")
+            if name.lower().endswith(".zip"):
+                name = name[:-4]
+            return name.strip() or None
+        return None
+    finally:
+        response.close()
+
+
 def _normalize_only(only: Iterable[str] | None) -> set[str] | None:
     """Case-insensitive set of the file names `only` asks for, or None for
     "everything" (an empty `only` also means everything)."""
